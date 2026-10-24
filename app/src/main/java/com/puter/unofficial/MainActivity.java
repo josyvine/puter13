@@ -498,8 +498,9 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         headlessAudioBridge = new HeadlessAudioBridge(this, headlessAudioWebView);
         webAppInterface.setAudioBridge(headlessAudioBridge);
 
-        // Ensure Android never throttles background JavaScript execution or network calls
+        // Ensure Android never throttles background JavaScript execution or audio streaming
         headlessAudioWebView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        headlessAudioWebView.setKeepScreenOn(true);
 
         WebSettings ws = headlessAudioWebView.getSettings();
         ws.setJavaScriptEnabled(true);
@@ -520,6 +521,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                headlessAudioWebView.resumeTimers();
                 syncPuterTokenToHeadless(false);
             }
         });
@@ -538,11 +540,14 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             }
 
             @Override
-            public void onAudioChunkReceived(String base64Pcm) {}
+            public void onAudioChunkReceived(String base64Pcm) {
+                // PCM audio chunk received and playing through WebAudio in Gemini's voice character
+            }
 
             @Override
             public void onCommentaryFinished() {
-                onLiveSessionFinished();
+                // A single vocal turn finished; stream stays active for the next user voice turn
+                LiveLogManager.getInstance().info("GEMINI_LIVE", "Vocal Turn Completed", "Microphone remains active for multi-turn input.");
             }
 
             @Override
@@ -559,10 +564,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         headlessAudioWebView.loadUrl("https://appassets.androidplatform.net/assets/headless_live_audio.html");
     }
 
-    /**
-     * Injects the active Puter authentication token directly into localStorage
-     * and into the in-memory puter SDK instance (puter.authToken and puter.auth.token).
-     */
     public void syncPuterTokenToHeadless() {
         syncPuterTokenToHeadless(false);
     }
@@ -573,7 +574,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         if (token != null && !token.trim().isEmpty()) {
             String clean = token.trim();
             if (!force && clean.equals(lastInjectedPuterToken)) {
-                return; // Token already synchronized, abort loop completely
+                return;
             }
             lastInjectedPuterToken = clean;
 
@@ -664,6 +665,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             if (tvLiveVoiceStatus != null) tvLiveVoiceStatus.setText(R.string.voice_status_listening);
             toggleStarAnimation(true);
             addSystemMessage("🟢 Connected to Gemini Live Model");
+            LiveLogManager.getInstance().ok("GEMINI_LIVE", "Session Active (Multi-Turn)", "Connected with model: " + activeModelId);
             Toast.makeText(MainActivity.this, "Connected to Gemini Live Model", Toast.LENGTH_SHORT).show();
         });
     }
@@ -674,14 +676,19 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         });
     }
 
-    public void onLiveSessionFinished() {
+    public void onLiveSessionClosedWithTelemetry(int code, String reason, boolean clean) {
         runOnUiThread(() -> {
             if (isLiveVoiceConnected) {
                 isLiveVoiceConnected = false;
                 if (tvLiveVoiceStatus != null) tvLiveVoiceStatus.setText(R.string.voice_status_speaking);
                 toggleStarAnimation(false);
-                addSystemMessage("🔴 Disconnected from Live Model");
-                Toast.makeText(MainActivity.this, "Disconnected from Live Model", Toast.LENGTH_SHORT).show();
+                
+                String statusMsg = "🔴 Disconnected from Live Model";
+                if (code != 1000 && reason != null && !reason.isEmpty()) {
+                    statusMsg += " (" + code + ": " + reason + ")";
+                }
+                addSystemMessage(statusMsg);
+                Toast.makeText(MainActivity.this, statusMsg, Toast.LENGTH_SHORT).show();
 
                 if (previousProviderBeforeLive != null) {
                     activeProvider = previousProviderBeforeLive;
@@ -692,14 +699,19 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         });
     }
 
+    public void onLiveSessionFinished() {
+        onLiveSessionClosedWithTelemetry(1000, "Clean termination", true);
+    }
+
     public void onLiveError(String err) {
         runOnUiThread(() -> {
+            LiveLogManager.getInstance().error("GEMINI_LIVE", "Live Session Error Encountered", err);
             if (isLiveVoiceConnected) {
                 isLiveVoiceConnected = false;
                 if (tvLiveVoiceStatus != null) tvLiveVoiceStatus.setText(err);
                 toggleStarAnimation(false);
-                addSystemMessage("🔴 Disconnected from Live Model");
-                Toast.makeText(MainActivity.this, "Live Model Disconnected: " + err, Toast.LENGTH_SHORT).show();
+                addSystemMessage("🔴 Disconnected from Live Model (" + err + ")");
+                Toast.makeText(MainActivity.this, "Live Error: " + err, Toast.LENGTH_SHORT).show();
 
                 if (previousProviderBeforeLive != null) {
                     activeProvider = previousProviderBeforeLive;
@@ -1311,17 +1323,11 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         return text;
     }
 
-    /**
-     * Executes Puter multi-model chat or image generation via the headless Puter SDK worker.
-     * Guarantees token injection directly before dispatching.
-     */
     private void dispatchPuterGeneration(String prompt, List<StagedFile> attachments, ChatMessage assistantMsg) {
         currentActiveAssistantMsg = assistantMsg;
         
-        // Force sync token right now to ensure headless context has the token before dispatch
         syncPuterTokenToHeadless(true);
 
-        // Audit device network connection
         boolean isConnected = false;
         try {
             ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -1963,10 +1969,11 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         aspectRatioBar.setVisibility(isImage ? View.VISIBLE : View.GONE);
     }
 
-    // --- LIVE VOICE AGENT ---
+    // --- LIVE VOICE AGENT (EXACT OLD APP MODEL BINDING & MULTI-TURN RESILIENCE) ---
 
     private void launchLiveVoiceAgent() {
         if (isLiveVoiceConnected) {
+            LiveLogManager.getInstance().info("GEMINI_LIVE", "User Terminated Live Session", "Closing active WebSocket session.");
             if (headlessAudioBridge != null) {
                 headlessAudioBridge.stopCommentarySession();
             }
@@ -1984,6 +1991,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
 
         String apiKey = prefs.getString(AppConstants.KEY_GEMINI_API_KEY, "");
         if (apiKey.trim().isEmpty()) {
+            LiveLogManager.getInstance().warn("GEMINI_LIVE", "Live Agent Blocked", "Gemini API key is not configured.");
             new AlertDialog.Builder(this)
                     .setTitle("Gemini Live")
                     .setMessage("Please configure a valid Gemini Access API key first in Settings.")
@@ -1993,36 +2001,56 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             return;
         }
 
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            LiveLogManager.getInstance().warn("GEMINI_LIVE", "Live Agent Blocked", "Microphone RECORD_AUDIO permission missing.");
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO}, 202);
+            return;
+        }
+
         previousProviderBeforeLive = activeProvider;
         activeProvider = "Gemini";
         prefs.edit().putString(AppConstants.KEY_ACTIVE_PROVIDER, activeProvider).apply();
 
-        String targetLiveModel = "Gemini 3.1 Flash Live Preview";
-        if (activeModelId.toLowerCase(Locale.US).contains("native-audio") ||
-            activeModelId.equalsIgnoreCase("Gemini 2.5 Flash Native Audio Preview")) {
-            targetLiveModel = activeModelId;
-        } else {
+        // Old App Model Preservation Logic:
+        // If user already picked a live model, KEEP that exact model ID!
+        String targetLiveModel = activeModelId;
+        boolean alreadyLiveModel = false;
+
+        String idLower = (activeModelId != null) ? activeModelId.toLowerCase(Locale.US) : "";
+        if (idLower.contains("live") || idLower.contains("native-audio") || idLower.contains("native audio")) {
+            alreadyLiveModel = true;
+        }
+
+        if (!alreadyLiveModel) {
             for (AIModelDefinition m : allModelsList) {
-                String dName = m.getDisplayName() != null ? m.getDisplayName() : "";
-                String mId = m.getId() != null ? m.getId() : "";
-                if (dName.equalsIgnoreCase("Gemini 3.1 Flash Live Preview") ||
-                    mId.toLowerCase(Locale.US).contains("3.1-flash-live")) {
+                String dName = (m.getDisplayName() != null) ? m.getDisplayName().toLowerCase(Locale.US) : "";
+                String mId = (m.getId() != null) ? m.getId().toLowerCase(Locale.US) : "";
+                if (dName.contains("3.1 flash live") || mId.contains("3.1-flash-live")) {
                     targetLiveModel = m.getId();
                     break;
                 }
             }
+            if (targetLiveModel == null || targetLiveModel.isEmpty()) {
+                targetLiveModel = "gemini-3.1-flash-live-preview";
+            }
         }
+
         activeModelId = targetLiveModel;
-        selectedModelText.setText(activeModelId);
+        updateSelectedModelDisplayText();
         if (currentSession != null) {
             currentSession.setSelectedModelId(activeModelId);
             sessionManager.saveSession(currentSession);
         }
 
-        Toast.makeText(this, "Switched active provider model to Gemini Live Preview", Toast.LENGTH_SHORT).show();
+        LiveLogManager.getInstance().process("GEMINI_LIVE", "Launching Live Session via Bridge", 
+                "Model: " + activeModelId + " | Key Length: " + apiKey.trim().length());
+        Toast.makeText(this, "Connecting to Live Model: " + selectedModelText.getText(), Toast.LENGTH_SHORT).show();
 
         if (headlessAudioBridge != null) {
             headlessAudioBridge.startCommentarySession("auto", activeModelId);
+        } else {
+            LiveLogManager.getInstance().error("GEMINI_LIVE", "Bridge Inactive", "HeadlessAudioBridge instance is null.");
+            Toast.makeText(this, "Live Audio Bridge not ready yet.", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -2590,13 +2618,9 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         popupWebView.loadUrl(sdkAuthUrl, headers);
     }
 
-    /**
-     * Inspects localStorage, Puter JS runtime, and WebKit cookies for session credentials.
-     */
     private void extractTokensFromWebView(WebView webView, boolean finalizeOnFound) {
         if (webView == null) return;
 
-        // 1. Check WebKit Cookies on puter.com
         try {
             CookieManager cm = CookieManager.getInstance();
             String cookies = cm.getCookie("https://puter.com");
@@ -2639,7 +2663,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             LiveLogManager.getInstance().error("PUTER_AUTH", "Cookie Scan Error", e.getMessage());
         }
 
-        // 2. Query localStorage directly via JavaScript
         String jsQuery = "(function(){" +
                 "  var t = '';" +
                 "  try { t = localStorage.getItem('puter.auth.token') || localStorage.getItem('token') || ''; } catch(e){}" +
