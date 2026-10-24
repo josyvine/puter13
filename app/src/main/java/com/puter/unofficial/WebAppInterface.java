@@ -66,7 +66,7 @@ public class WebAppInterface {
         logger.log(level, tag != null ? tag : "JS_BRIDGE", title, details);
     }
 
-    // --- EXISTING CONFIGURATION METHODS ---
+    // --- CONFIGURATION RETRIEVAL METHODS ---
 
     @JavascriptInterface
     public String getGeminiApiKey() {
@@ -192,7 +192,7 @@ public class WebAppInterface {
         }
     }
 
-    // --- LIVE WEBSOCKET & COMMENTARY CALLBACKS ---
+    // --- LIVE WEBSOCKET & MULTI-TURN COMMENTARY CALLBACKS ---
 
     @JavascriptInterface
     public void onLiveSessionConnected() {
@@ -224,17 +224,33 @@ public class WebAppInterface {
 
     @JavascriptInterface
     public void onLiveCommentaryFinished() {
-        logger.info("GEMINI_LIVE", "Turn Completed", "Live commentary response finished.");
+        // Individual turn finished; log event and keep session alive for continuous speech
+        logger.info("GEMINI_LIVE", "Vocal Turn Completed", "Model finished speaking turn. Microphone active for reply.");
         if (audioBridge != null) {
             audioBridge.dispatchFinished();
         }
+    }
+
+    @JavascriptInterface
+    public void onLiveSessionClosedWithTelemetry(int code, String reason, boolean wasClean) {
+        String logDesc = "Close Code: " + code + " | Reason: '" + reason + "' | WasClean: " + wasClean;
+        if (code == 1000) {
+            logger.info("GEMINI_LIVE", "Remote WebSocket Closed (Clean)", logDesc);
+        } else {
+            logger.error("GEMINI_LIVE", "Remote WebSocket Closed (Error)", logDesc);
+        }
+
+        if (audioBridge != null) {
+            audioBridge.dispatchSessionClosedWithTelemetry(code, reason, wasClean);
+        }
         if (mainActivity != null) {
-            mainActivity.runOnUiThread(() -> mainActivity.onLiveSessionFinished());
+            mainActivity.runOnUiThread(() -> mainActivity.onLiveSessionClosedWithTelemetry(code, reason, wasClean));
         }
     }
 
     @JavascriptInterface
     public void onLiveError(String err) {
+        logger.error("GEMINI_LIVE", "Live Session Error Event", err != null ? err : "Unknown error");
         if (audioBridge != null) {
             audioBridge.dispatchError(err);
         }
