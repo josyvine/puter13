@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
 /**
  * Thread-safe singleton managing the in-memory log buffer, disk persistence,
  * badge counters, and live UI dispatches for the System Log Console.
+ * Features deep telemetry interception for WebSockets, audio pipelines, and background RPC.
  */
 public class LiveLogManager {
 
@@ -33,7 +34,7 @@ public class LiveLogManager {
     private static final String LOG_FILE_NAME = "system_diagnostic_logs.json";
     private static final int MAX_MEMORY_LOGS = 1000;
 
-    private static LiveLogManager instance;
+    private static volatile LiveLogManager instance;
     private final Context context;
     private final Handler mainHandler;
     private final ExecutorService ioExecutor;
@@ -95,8 +96,23 @@ public class LiveLogManager {
         log(LogEntry.Level.WARN, tag, title, details);
     }
 
+    public void warn(String tag, String title, Throwable throwable) {
+        String details = extractStackTrace(throwable);
+        log(LogEntry.Level.WARN, tag, title, details);
+    }
+
     public void error(String tag, String title, String details) {
         log(LogEntry.Level.ERROR, tag, title, details);
+    }
+
+    public void error(String tag, String title, Throwable throwable) {
+        String details = extractStackTrace(throwable);
+        log(LogEntry.Level.ERROR, tag, title, details);
+    }
+
+    public void error(String tag, String title, String details, Throwable throwable) {
+        String fullDetails = (details != null ? details : "") + "\n" + extractStackTrace(throwable);
+        log(LogEntry.Level.ERROR, tag, title, fullDetails.trim());
     }
 
     public void process(String tag, String title, String details) {
@@ -104,14 +120,20 @@ public class LiveLogManager {
     }
 
     public void crash(String tag, String title, Throwable throwable) {
-        String details = "";
-        if (throwable != null) {
+        String details = extractStackTrace(throwable);
+        log(LogEntry.Level.CRASH, tag, title, details);
+    }
+
+    private String extractStackTrace(Throwable throwable) {
+        if (throwable == null) return "";
+        try {
             StringWriter sw = new StringWriter();
             PrintWriter pw = new PrintWriter(sw);
             throwable.printStackTrace(pw);
-            details = sw.toString();
+            return sw.toString();
+        } catch (Exception ignored) {
+            return String.valueOf(throwable.getMessage());
         }
-        log(LogEntry.Level.CRASH, tag, title, details);
     }
 
     public void log(LogEntry.Level level, String tag, String title, String details) {
