@@ -10,9 +10,9 @@
 <script>
 /**
  * Headless Live Audio, WebSocket & Puter SDK Bridge for Puter Unofficial
- * Handles Gemini Live BidiGenerateContent WebSocket, 24kHz audio streaming,
- * 16kHz microphone capture, barge-in interruption detection, Puter SDK Auth,
- * and official client-side Puter AI chat completions & model listing.
+ * Exact Gemini Live BidiGenerateContent Audio Engine adopted from Puter11.
+ * Pure Live Voice Character streaming (Puck, Aoede, etc.) over 24kHz PCM,
+ * 16kHz hardware microphone capture, and deep Java telemetry.
  */
 
 // =========================================================================
@@ -29,7 +29,7 @@ function sendLogToNative(level, tag, title, details) {
     }
 }
 
-// Override JS Console to capture all Puter SDK internal telemetry
+// Override JS Console to capture all internal telemetry
 (function() {
     const originalLog = console.log;
     const originalWarn = console.warn;
@@ -66,7 +66,7 @@ function sendLogToNative(level, tag, title, details) {
 
 
 // =========================================================================
-// GEMINI LIVE AUDIO PIPELINE
+// GEMINI LIVE BIDIDIRECTIONAL AUDIO PIPELINE (EXACT OLD APP ARCHITECTURE)
 // =========================================================================
 
 let liveWs = null;
@@ -75,41 +75,33 @@ let playbackAudioContext = null;
 let micMediaStream = null;
 let micScriptProcessor = null;
 let isSessionActive = false;
-let currentPersona = "";
 let nextPlaybackTime = 0;
 let isPuterChatAborted = false;
 let lastSyncedTokenToNative = null;
 
 window.startCommentarySession = function(scriptText, personaPrompt) {
-    sendLogToNative("PROCESS", "GEMINI_LIVE", "Starting Live Audio Session", `Target: ${scriptText ? 'Vision' : 'Standard'}`);
     if (isSessionActive) {
         window.stopCommentarySession();
     }
+
     const bridge = getBridge();
     const apiKey = bridge ? bridge.getGeminiApiKey() : "";
 
-    let rawModel = "gemini-3.1-flash-live-preview";
+    // 1. Resolve Exact Model Name (Old App Logic)
+    let selectedModel = "";
     if (personaPrompt && typeof personaPrompt === "string" && personaPrompt.trim().length > 0 && personaPrompt !== "auto") {
-        rawModel = personaPrompt;
+        selectedModel = personaPrompt.trim();
     } else if (bridge && bridge.getModelId && bridge.getModelId()) {
-        rawModel = bridge.getModelId();
+        selectedModel = bridge.getModelId().trim();
     }
 
-    let cleanModel = rawModel.replace(/^models\//, "").trim();
-
-    if (cleanModel.toLowerCase().includes("native-audio") || 
-        cleanModel.toLowerCase().includes("native audio") || 
-        cleanModel.toLowerCase().includes("2.5-flash-native")) {
-        cleanModel = "gemini-2.5-flash-native-audio-preview-12-2025";
-    } else {
-        cleanModel = "gemini-3.1-flash-live-preview";
+    if (!selectedModel) {
+        selectedModel = "gemini-3.1-flash-live-preview";
     }
 
-    currentPersona = "You are an intelligent real-time conversational AI voice assistant.";
-    if (bridge && bridge.getCustomInstruction && bridge.getCustomInstruction().trim().length > 0) {
-        currentPersona = bridge.getCustomInstruction();
-    }
+    let cleanModel = selectedModel.replace(/^models\//, "").trim();
 
+    // 2. Resolve Voice Character
     let voiceName = "Puck";
     if (bridge && bridge.getGeminiVoice && bridge.getGeminiVoice()) {
         voiceName = bridge.getGeminiVoice().split(" ")[0].trim();
@@ -117,27 +109,40 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
         voiceName = bridge.getVoiceName().split(" ")[0].trim();
     }
 
+    // 3. Resolve Persona / System Instruction
+    let systemInstructionText = "";
+    if (bridge && bridge.getCustomInstruction && bridge.getCustomInstruction().trim().length > 0) {
+        systemInstructionText = bridge.getCustomInstruction().trim();
+    }
+
+    sendLogToNative("PROCESS", "GEMINI_LIVE", "Connecting Live Voice Session", 
+        `Model: models/${cleanModel} | Voice: ${voiceName} | Instruction: ${systemInstructionText ? 'Custom' : 'Default'}`);
+
     if (!apiKey || apiKey.trim().length === 0) {
-        sendLogToNative("ERROR", "GEMINI_LIVE", "Missing API Key", "Cannot start session without Gemini API Key.");
-        if (bridge && bridge.onLiveError) {
-            bridge.onLiveError("Gemini API key is missing. Set your key in Settings.");
-        }
+        const keyErr = "Gemini API key is missing. Set your key in Settings.";
+        sendLogToNative("ERROR", "GEMINI_LIVE", "Missing API Key", keyErr);
+        if (bridge && bridge.onLiveError) bridge.onLiveError(keyErr);
         return;
     }
 
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(apiKey.trim())}`;
+    // 4. Exact Old App Endpoint (v1alpha GenerativeService.BidiGenerateContent)
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(apiKey.trim())}`;
+    
     try {
         liveWs = new WebSocket(wsUrl);
-        sendLogToNative("INFO", "GEMINI_LIVE", "WebSocket Connecting", `URL: wss://generativelanguage.googleapis.com/...`);
+        sendLogToNative("INFO", "GEMINI_LIVE", "WebSocket Initialized", `Target: wss://generativelanguage.googleapis.com/...v1alpha...`);
     } catch (e) {
-        sendLogToNative("ERROR", "GEMINI_LIVE", "WebSocket Init Failed", e.message);
-        if (bridge && bridge.onLiveError) bridge.onLiveError("WebSocket init failed: " + e.message);
+        const initErr = "WebSocket creation failed: " + (e.message || String(e));
+        sendLogToNative("CRASH", "GEMINI_LIVE", "Init Exception", initErr);
+        if (bridge && bridge.onLiveError) bridge.onLiveError(initErr);
         return;
     }
 
     liveWs.onopen = function() {
-        sendLogToNative("OK", "GEMINI_LIVE", "WebSocket Opened", "Sending initial setup config payload...");
-        const setupMessage = {
+        sendLogToNative("OK", "GEMINI_LIVE", "WebSocket Connected", `ReadyState: ${liveWs.readyState} | Protocol: ${liveWs.protocol || 'None'}`);
+
+        // Construct Setup Payload matching the Old App configuration
+        const setupPayload = {
             setup: {
                 model: "models/" + cleanModel,
                 generationConfig: {
@@ -149,35 +154,23 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                             }
                         }
                     }
-                },
-                systemInstruction: {
-                    parts: [{ text: currentPersona }]
-                },
-                tools: [
-                    {
-                        functionDeclarations: [
-                            {
-                                name: "locate_target",
-                                description: "Returns normalized bounding coordinates [ymin, xmin, ymax, xmax] for an identified visual target.",
-                                parameters: {
-                                    type: "OBJECT",
-                                    properties: {
-                                        targetId: { type: "STRING" },
-                                        box_2d: {
-                                            type: "ARRAY",
-                                            items: { type: "NUMBER" },
-                                            description: "[ymin, xmin, ymax, xmax] in normalized scale (0 to 1000)"
-                                        }
-                                    },
-                                    required: ["targetId", "box_2d"]
-                                }
-                            }
-                        ]
-                    }
-                ]
+                }
             }
         };
-        liveWs.send(JSON.stringify(setupMessage));
+
+        if (systemInstructionText) {
+            setupPayload.setup.systemInstruction = {
+                parts: [{ text: systemInstructionText }]
+            };
+        }
+
+        const setupJson = JSON.stringify(setupPayload);
+        sendLogToNative("INFO", "GEMINI_LIVE", "Dispatched Setup Payload", setupJson);
+        try {
+            liveWs.send(setupJson);
+        } catch(err) {
+            sendLogToNative("ERROR", "GEMINI_LIVE", "Setup Frame Send Failed", err.message || String(err));
+        }
     };
 
     liveWs.onmessage = async function(event) {
@@ -186,8 +179,9 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
             let jsonText = (data instanceof Blob) ? await data.text() : data;
             let payload = JSON.parse(jsonText);
 
+            // Server acknowledged setup frame
             if (payload.setupComplete) {
-                sendLogToNative("OK", "GEMINI_LIVE", "Setup Complete", "Microphone capture initializing...");
+                sendLogToNative("OK", "GEMINI_LIVE", "Setup Complete", `Google accepted models/${cleanModel}. Live BidiStream established.`);
                 isSessionActive = true;
                 initMicrophoneCapture();
                 if (bridge && bridge.onLiveSessionConnected) {
@@ -199,29 +193,36 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                 return;
             }
 
+            // Server returned explicit error frame
             if (payload.error) {
-                sendLogToNative("ERROR", "GEMINI_LIVE", "Server Error", JSON.stringify(payload.error));
+                const errDetail = JSON.stringify(payload.error);
+                sendLogToNative("ERROR", "GEMINI_LIVE", "Google Server Error Frame", errDetail);
                 if (bridge && bridge.onLiveError) {
-                    bridge.onLiveError(payload.error.message || JSON.stringify(payload.error));
+                    bridge.onLiveError("Google Live Server Error: " + (payload.error.message || errDetail));
                 }
-                window.stopCommentarySession();
                 return;
             }
 
+            // Process live audio and text content
             if (payload.serverContent) {
                 const content = payload.serverContent;
+                
+                // Barge-in interruption detection
                 if (content.interrupted) {
                     nextPlaybackTime = 0;
-                    sendLogToNative("WARN", "GEMINI_LIVE", "User Interruption", "Server detected barge-in.");
+                    sendLogToNative("WARN", "GEMINI_LIVE", "Barge-In Interruption", "Server detected user speech; halting active audio playback.");
                     if (bridge && bridge.onLiveCommentaryText) {
                         bridge.onLiveCommentaryText("⚡ [Interrupted]");
                     }
                 }
+
                 if (content.modelTurn && content.modelTurn.parts) {
                     for (const part of content.modelTurn.parts) {
+                        // Live text transcription turn
                         if (part.text && bridge && bridge.onLiveCommentaryText) {
                             bridge.onLiveCommentaryText(part.text);
                         }
+                        // Live PCM audio waveform turn
                         if (part.inlineData && part.inlineData.mimeType && part.inlineData.mimeType.startsWith("audio/")) {
                             const base64Audio = part.inlineData.data;
                             if (bridge && bridge.onLiveAudioChunkReceived) {
@@ -231,46 +232,42 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                         }
                     }
                 }
-            }
 
-            if (payload.toolCall && payload.toolCall.functionCalls) {
-                for (const call of payload.toolCall.functionCalls) {
-                    if (call.name === "locate_target" && call.args) {
-                        const tId = call.args.targetId || "";
-                        const b = call.args.box_2d || [0, 0, 0, 0];
-                        sendLogToNative("INFO", "GEMINI_LIVE", "Tool Call (locate_target)", `TargetId: ${tId}, Box: ${JSON.stringify(b)}`);
-                        if (bridge && bridge.onTargetCoordinatesReceived) {
-                            bridge.onTargetCoordinatesReceived(tId, b[1] || 0, b[0] || 0, b[3] || 0, b[2] || 0);
-                        }
-                        const resp = {
-                            toolResponse: {
-                                functionResponses: [
-                                    {
-                                        response: { output: { success: true } },
-                                        id: call.id
-                                    }
-                                ]
-                            }
-                        };
-                        liveWs.send(JSON.stringify(resp));
-                    }
+                // Turn completed: Do NOT close socket, microphone remains open
+                if (content.turnComplete) {
+                    sendLogToNative("INFO", "GEMINI_LIVE", "Turn Complete", "Model vocalization turn finished. Stream remains active for user input.");
                 }
             }
+
         } catch (e) {
-            sendLogToNative("ERROR", "GEMINI_LIVE", "Message Parse Error", e.message);
+            sendLogToNative("ERROR", "GEMINI_LIVE", "Payload Parsing Exception", `${e.message} | Raw: ${String(event.data).substring(0, 150)}`);
         }
     };
 
     liveWs.onerror = function(err) {
-        sendLogToNative("ERROR", "GEMINI_LIVE", "WebSocket Error", "Connection threw an error event.");
-        if (bridge && bridge.onLiveError) bridge.onLiveError("WebSocket connection error");
+        const errorDetail = `WebSocket error event occurred. ReadyState: ${liveWs ? liveWs.readyState : 'null'}`;
+        sendLogToNative("ERROR", "GEMINI_LIVE", "WebSocket Connection Error", errorDetail);
+        if (bridge && bridge.onLiveError) {
+            bridge.onLiveError(errorDetail);
+        }
     };
 
-    liveWs.onclose = function() {
-        sendLogToNative("INFO", "GEMINI_LIVE", "WebSocket Closed", "Session terminated cleanly.");
+    liveWs.onclose = function(event) {
+        const closeReport = `Code: ${event.code} | Reason: '${event.reason || "None"}' | Clean: ${event.wasClean}`;
+        
+        if (event.code === 1000) {
+            sendLogToNative("INFO", "GEMINI_LIVE", "WebSocket Closed (Clean)", closeReport);
+        } else {
+            sendLogToNative("ERROR", "GEMINI_LIVE", `WebSocket Closed With Error (${event.code})`, closeReport);
+        }
+
         isSessionActive = false;
         cleanupAudio();
-        if (bridge && bridge.onLiveCommentaryFinished) {
+        
+        // Notify native bridge with full close code telemetry
+        if (bridge && bridge.onLiveSessionClosedWithTelemetry) {
+            bridge.onLiveSessionClosedWithTelemetry(event.code, event.reason || "Socket closed by remote host", event.wasClean);
+        } else if (bridge && bridge.onLiveCommentaryFinished) {
             bridge.onLiveCommentaryFinished();
         }
     };
@@ -312,12 +309,13 @@ window.groundTargetWithVision = function(base64Jpg, targetId, desc) {
 };
 
 window.stopCommentarySession = function() {
+    sendLogToNative("INFO", "GEMINI_LIVE", "Session Stop Triggered", "Cleaning up WebSocket and WebAudio pipelines...");
     isSessionActive = false;
     cleanupAudio();
     if (liveWs) {
         try { 
             liveWs.onclose = null;
-            liveWs.close(); 
+            liveWs.close(1000, "Client stopped session"); 
         } catch(e) {}
         liveWs = null;
     }
@@ -329,7 +327,9 @@ window.stopCommentarySession = function() {
 
 function cleanupAudio() {
     if (micMediaStream) {
-        try { micMediaStream.getTracks().forEach(t => t.stop()); } catch(e) {}
+        try { 
+            micMediaStream.getTracks().forEach(t => t.stop()); 
+        } catch(e) {}
         micMediaStream = null;
     }
     if (micScriptProcessor) {
@@ -349,12 +349,25 @@ function cleanupAudio() {
 
 function initMicrophoneCapture() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        const noMicMsg = "navigator.mediaDevices.getUserMedia not supported in this WebView context.";
+        sendLogToNative("ERROR", "AUDIO_RECORD", "Mic Hardware Missing", noMicMsg);
         const bridge = getBridge();
-        if (bridge && bridge.onLiveError) bridge.onLiveError("Microphone API not supported on this device");
+        if (bridge && bridge.onLiveError) bridge.onLiveError(noMicMsg);
         return;
     }
 
-    navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } })
+    // Hardware audio constraints adopted directly from the Old App
+    const audioConstraints = {
+        audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+        }
+    };
+
+    navigator.mediaDevices.getUserMedia(audioConstraints)
         .then(stream => {
             micMediaStream = stream;
             const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -364,9 +377,14 @@ function initMicrophoneCapture() {
             if (micAudioContext.state === 'suspended') {
                 micAudioContext.resume();
             }
+
+            const track = stream.getAudioTracks()[0];
+            sendLogToNative("OK", "AUDIO_RECORD", "Microphone Active", `Track: ${track ? track.label : 'Default Mono'} | EchoCancellation: true`);
+
             const source = micAudioContext.createMediaStreamSource(stream);
             const processor = micAudioContext.createScriptProcessor(4096, 1, 1);
 
+            let chunksDispatched = 0;
             processor.onaudioprocess = function(e) {
                 if (!isSessionActive || !liveWs || liveWs.readyState !== WebSocket.OPEN) return;
                 const inputData = e.inputBuffer.getChannelData(0);
@@ -392,7 +410,16 @@ function initMicrophoneCapture() {
                         ]
                     }
                 };
-                liveWs.send(JSON.stringify(realtimeInput));
+
+                try {
+                    liveWs.send(JSON.stringify(realtimeInput));
+                    chunksDispatched++;
+                    if (chunksDispatched === 1) {
+                        sendLogToNative("OK", "AUDIO_RECORD", "First PCM Frame Dispatched", `Length: ${pcm16.length} samples`);
+                    }
+                } catch(sendEx) {
+                    sendLogToNative("ERROR", "AUDIO_RECORD", "Frame Send Failure", sendEx.message || String(sendEx));
+                }
             };
 
             source.connect(processor);
@@ -400,9 +427,10 @@ function initMicrophoneCapture() {
             micScriptProcessor = processor;
         })
         .catch(err => {
-            sendLogToNative("ERROR", "GEMINI_LIVE", "Mic Access Denied", err.message);
+            const micErr = `Microphone access failure: ${err.name} - ${err.message}`;
+            sendLogToNative("ERROR", "AUDIO_RECORD", "Mic Hardware Error", micErr);
             const bridge = getBridge();
-            if (bridge && bridge.onLiveError) bridge.onLiveError("Microphone permission required for Live Voice: " + err.message);
+            if (bridge && bridge.onLiveError) bridge.onLiveError(micErr);
         });
 }
 
@@ -437,48 +465,32 @@ function playAudioChunk(base64Pcm) {
         source.start(nextPlaybackTime);
         nextPlaybackTime += buffer.duration;
     } catch(e) {
-        sendLogToNative("ERROR", "AUDIO_PLAYBACK", "PCM Decode Error", e.message);
+        sendLogToNative("ERROR", "AUDIO_PLAYBACK", "PCM Decoding Error", e.message || String(e));
     }
 }
 
 // =========================================================================
-// PUTER.JS CLIENT-SIDE SDK INTEGRATION (DEEP TELEMETRY & MULTI-LAYER RECOVERY)
+// PUTER.JS CLIENT-SIDE SDK INTEGRATION (RETAINED IN FULL)
 // =========================================================================
 
-/**
- * Pushes any discovered Puter token to Java native AuthManager and updates UI status.
- * Strictly dedupes to permanently kill recursive loop spam.
- */
 function syncPuterTokenToNative(token, source) {
     if (!token || typeof token !== 'string' || token.trim().length === 0) return;
     const cleanToken = token.trim();
-
-    // Loop Breaker: abort immediately if this token was already synchronized
-    if (cleanToken === lastSyncedTokenToNative) {
-        return;
-    }
+    if (cleanToken === lastSyncedTokenToNative) return;
     lastSyncedTokenToNative = cleanToken;
 
     const bridge = getBridge();
-    if (bridge && bridge.saveAuthToken) {
-        bridge.saveAuthToken(cleanToken);
-    }
-    if (bridge && bridge.onAuthStatusChanged) {
-        bridge.onAuthStatusChanged(true);
-    }
+    if (bridge && bridge.saveAuthToken) bridge.saveAuthToken(cleanToken);
+    if (bridge && bridge.onAuthStatusChanged) bridge.onAuthStatusChanged(true);
     sendLogToNative("OK", "PUTER_AUTH", "Token Synced to Native", `Source: ${source} | Length: ${cleanToken.length}`);
 }
 
-/**
- * Multi-layer inspection: examines JS SDK runtime, browser LocalStorage, and Native Java Storage.
- */
 function ensurePuterAuth() {
     const bridge = getBridge();
     let token = "";
     let source = "";
 
     try {
-        // Layer 1: Check Puter SDK runtime instance in memory
         if (typeof puter !== 'undefined') {
             if (puter.authToken && typeof puter.authToken === 'string' && puter.authToken.length > 5) {
                 token = puter.authToken;
@@ -489,7 +501,6 @@ function ensurePuterAuth() {
             }
         }
 
-        // Layer 2: Check LocalStorage
         if (!token || token.trim().length === 0) {
             const lsToken = localStorage.getItem('puter.auth.token') || localStorage.getItem('token');
             if (lsToken && lsToken.trim().length > 5) {
@@ -498,67 +509,47 @@ function ensurePuterAuth() {
             }
         }
 
-        // Layer 3: Check Native Java AuthManager via Bridge (Corrected Method Name)
         if (!token || token.trim().length === 0) {
-            if (bridge) {
-                if (bridge.getSavedAuthToken) {
-                    const natToken = bridge.getSavedAuthToken();
-                    if (natToken && typeof natToken === 'string' && natToken.trim().length > 5) {
-                        token = natToken;
-                        source = "Native AuthManager (getSavedAuthToken)";
-                    }
+            if (bridge && bridge.getSavedAuthToken) {
+                const natToken = bridge.getSavedAuthToken();
+                if (natToken && typeof natToken === 'string' && natToken.trim().length > 5) {
+                    token = natToken;
+                    source = "Native AuthManager";
                 }
             }
         }
 
-        // If found anywhere, propagate and update SDK state
         if (token && token.trim().length > 0) {
             token = token.trim();
             try { localStorage.setItem('puter.auth.token', token); } catch(e) {}
             if (typeof puter !== 'undefined') {
                 puter.authToken = token;
-                if (puter.auth) {
-                    puter.auth.token = token;
-                }
+                if (puter.auth) puter.auth.token = token;
             }
             syncPuterTokenToNative(token, source);
             return token;
         }
-
     } catch(e) {
         sendLogToNative("ERROR", "PUTER_AUTH", "Token Resolution Exception", e.message || String(e));
     }
-
-    const diagDetails = `Checked: [SDK Memory: ${typeof puter !== 'undefined' && puter.authToken ? 'Present' : 'Empty'}, ` +
-                        `LocalStorage: ${localStorage.getItem('puter.auth.token') ? 'Present' : 'Empty'}, ` +
-                        `Native Bridge: ${bridge && bridge.getSavedAuthToken && bridge.getSavedAuthToken() ? 'Present' : 'Empty'}]`;
-    sendLogToNative("WARN", "PUTER_AUTH", "Token Missing Across All Layers", diagDetails);
     return null;
 }
 
-/**
- * Inspects Puter SDK session proactively on page load.
- */
 window.checkAndBroadcastAuth = async function() {
     try {
         if (typeof puter !== 'undefined' && puter.auth) {
             let signedIn = false;
             try {
-                if (typeof puter.auth.isSignedIn === 'function') {
-                    signedIn = await puter.auth.isSignedIn();
-                }
+                if (typeof puter.auth.isSignedIn === 'function') signedIn = await puter.auth.isSignedIn();
             } catch(e) {}
 
             if (signedIn) {
                 let token = "";
-                if (typeof puter.auth.getToken === 'function') {
-                    token = puter.auth.getToken();
-                }
+                if (typeof puter.auth.getToken === 'function') token = puter.auth.getToken();
                 if (!token && puter.authToken) token = puter.authToken;
                 if (!token && puter.auth.token) token = puter.auth.token;
-
                 if (token) {
-                    syncPuterTokenToNative(token, "puter.auth.getToken() on init");
+                    syncPuterTokenToNative(token, "puter.auth.getToken()");
                     return;
                 }
             }
@@ -573,15 +564,12 @@ window.addEventListener('load', () => {
     setTimeout(window.checkAndBroadcastAuth, 1000);
 });
 
-/**
- * Fetches live models using the official Puter SDK runtime.
- */
 window.fetchPuterLiveModels = async function() {
     sendLogToNative("PROCESS", "PUTER_MODELS", "Fetching Live Models", "Triggering puter.ai.chat.models()...");
     const bridge = getBridge();
     try {
         if (typeof puter === 'undefined' || !puter.ai) {
-            sendLogToNative("ERROR", "PUTER_SDK", "SDK Not Initialized", "Puter object is missing in headless environment.");
+            sendLogToNative("ERROR", "PUTER_SDK", "SDK Not Initialized", "Puter object missing in headless environment.");
             if (bridge && bridge.onPuterError) bridge.onPuterError("Puter SDK is not ready yet in headless worker.");
             return;
         }
@@ -598,9 +586,7 @@ window.fetchPuterLiveModels = async function() {
         if (models) {
             sendLogToNative("OK", "PUTER_MODELS", "Live Models Fetched", "Count received successfully.");
             const jsonStr = (typeof models === 'string') ? models : JSON.stringify(models);
-            if (bridge && bridge.onPuterLiveModelsResult) {
-                bridge.onPuterLiveModelsResult(jsonStr);
-            }
+            if (bridge && bridge.onPuterLiveModelsResult) bridge.onPuterLiveModelsResult(jsonStr);
         } else {
             sendLogToNative("ERROR", "PUTER_MODELS", "Empty Response", "Model list returned null.");
             if (bridge && bridge.onPuterError) bridge.onPuterError("Puter models call returned empty response.");
@@ -611,10 +597,6 @@ window.fetchPuterLiveModels = async function() {
     }
 };
 
-/**
- * Sends a chat turn or image generation request via official puter.js client.
- * Features live latency heartbeat ticker, TTFT tracking, and verbose HTTP telemetry.
- */
 window.sendPuterChat = async function(messagesInput, modelId, isStream, systemMessage, aspectRatio) {
     const startDispatchTime = Date.now();
     sendLogToNative("PROCESS", "PUTER_CHAT", "Dispatching Chat", `Model: ${modelId} | Stream: ${isStream}`);
@@ -623,7 +605,6 @@ window.sendPuterChat = async function(messagesInput, modelId, isStream, systemMe
     isPuterChatAborted = false;
     let hasReceivedAnyChunk = false;
 
-    // Heartbeat ticker to inform exactly how long Puter is taking
     let secondsElapsed = 0;
     const heartbeatTimer = setInterval(() => {
         if (!hasReceivedAnyChunk && !isPuterChatAborted) {
@@ -660,9 +641,7 @@ window.sendPuterChat = async function(messagesInput, modelId, isStream, systemMe
         if (!authToken && puter.auth) {
             let isSigned = false;
             try { 
-                if (typeof puter.auth.isSignedIn === 'function') {
-                    isSigned = await puter.auth.isSignedIn();
-                }
+                if (typeof puter.auth.isSignedIn === 'function') isSigned = await puter.auth.isSignedIn();
             } catch(e){}
             
             if (!isSigned) {
@@ -713,8 +692,6 @@ window.sendPuterChat = async function(messagesInput, modelId, isStream, systemMe
         if (systemMessage && systemMessage.trim().length > 0 && Array.isArray(messages)) {
             messages.unshift({ role: 'system', content: systemMessage.trim() });
         }
-
-        sendLogToNative("INFO", "PUTER_PAYLOAD", "Payload Built", `Model: ${cleanModel} | Size: ${JSON.stringify(messages).length} chars`);
 
         const modelLower = cleanModel.toLowerCase();
         const isImageGen = modelLower.includes("banana") || modelLower.includes("dall-e") || 
@@ -791,9 +768,7 @@ window.sendPuterChat = async function(messagesInput, modelId, isStream, systemMe
 
                 if (deltaText) {
                     fullAccumulator += deltaText;
-                    if (bridge && bridge.onPuterStreamChunk) {
-                        bridge.onPuterStreamChunk(deltaText);
-                    }
+                    if (bridge && bridge.onPuterStreamChunk) bridge.onPuterStreamChunk(deltaText);
                 }
             }
 
