@@ -275,15 +275,10 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
 
 function sendTextMessage(text) {
     if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
+    // Updated to realtimeInput.text for Gemini 3.1 & 2.5 wire compatibility
     const msg = {
-        clientContent: {
-            turns: [
-                {
-                    role: "user",
-                    parts: [{ text: text }]
-                }
-            ],
-            turnComplete: true
+        realtimeInput: {
+            text: text
         }
     };
     liveWs.send(JSON.stringify(msg));
@@ -292,14 +287,13 @@ function sendTextMessage(text) {
 window.groundTargetWithVision = function(base64Jpg, targetId, desc) {
     if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
     const cleanBase64 = base64Jpg.replace(/^data:image\/[a-z]+;base64,/, '');
+    // Updated from deprecated mediaChunks to direct video wire format
     const msg = {
         realtimeInput: {
-            mediaChunks: [
-                {
-                    mimeType: "image/jpeg",
-                    data: cleanBase64
-                }
-            ]
+            video: {
+                mimeType: "image/jpeg",
+                data: cleanBase64
+            }
         }
     };
     liveWs.send(JSON.stringify(msg));
@@ -400,14 +394,13 @@ function initMicrophoneCapture() {
                 }
                 const base64Pcm = btoa(binary);
 
+                // FIXED: Direct 'audio' field format required by Google Live API (resolves Code 1007)
                 const realtimeInput = {
                     realtimeInput: {
-                        mediaChunks: [
-                            {
-                                mimeType: "audio/pcm;rate=16000",
-                                data: base64Pcm
-                            }
-                        ]
+                        audio: {
+                            mimeType: "audio/pcm;rate=16000",
+                            data: base64Pcm
+                        }
                     }
                 };
 
