@@ -31,6 +31,7 @@ public class HeadlessAudioBridge {
         void onAudioChunkReceived(String base64Pcm);
         void onCommentaryFinished();
         default void onSessionDisconnected() {}
+        default void onSessionClosedWithTelemetry(int code, String reason, boolean clean) {}
         void onTargetCoordinatesReceived(String targetId, float left, float top, float right, float bottom);
         void onError(String errorMessage);
     }
@@ -94,6 +95,7 @@ public class HeadlessAudioBridge {
                 mainHandler.post(() -> {
                     if (request != null) {
                         request.grant(request.getResources());
+                        LiveLogManager.getInstance().ok("GEMINI_LIVE_BRIDGE", "WebRTC Permission Granted", "Microphone access allowed for headless engine.");
                     }
                 });
             }
@@ -142,15 +144,36 @@ public class HeadlessAudioBridge {
             isSessionActive = true;
             String scriptEscaped = scriptText != null ? JSONObject.quote(scriptText) : "\"\"";
             String personaEscaped = personaPrompt != null ? JSONObject.quote(personaPrompt) : "\"\"";
-            String js = String.format("window.startCommentarySession(%s, %s);", scriptEscaped, personaEscaped);
-            webView.evaluateJavascript(js, null);
+            String js = String.format(
+                    "try {" +
+                    "  if (typeof window.startCommentarySession === 'function') {" +
+                    "    window.startCommentarySession(%s, %s);" +
+                    "    'LAUNCHED';" +
+                    "  } else {" +
+                    "    'MISSING_FUNCTION';" +
+                    "  }" +
+                    "} catch(e) {" +
+                    "  'ERROR:' + e.message;" +
+                    "}", scriptEscaped, personaEscaped);
+
+            webView.evaluateJavascript(js, value -> {
+                if (value == null || "\"MISSING_FUNCTION\"".equals(value)) {
+                    LiveLogManager.getInstance().error("GEMINI_LIVE_BRIDGE", "Bridge JS Function Missing", "window.startCommentarySession not defined.");
+                    dispatchError("Headless audio engine is not ready. Please try again.");
+                } else if (value.contains("ERROR:")) {
+                    LiveLogManager.getInstance().error("GEMINI_LIVE_BRIDGE", "JS Evaluation Exception", value);
+                    dispatchError("Live session start error: " + value);
+                } else {
+                    LiveLogManager.getInstance().ok("GEMINI_LIVE_BRIDGE", "Live Session Command Dispatched", "Handshake initiated with model: " + personaPrompt);
+                }
+            });
         });
     }
 
     public void stopCommentarySession() {
         mainHandler.post(() -> {
             isSessionActive = false;
-            webView.evaluateJavascript("window.stopCommentarySession();", null);
+            webView.evaluateJavascript("if (typeof window.stopCommentarySession === 'function') { window.stopCommentarySession(); }", null);
             dispatchDisconnected();
         });
     }
@@ -186,7 +209,6 @@ public class HeadlessAudioBridge {
             LiveLogManager.getInstance().process("PUTER_BRIDGE", "Dispatched to JS Engine",
                     "Model: " + modelId + " | Payload chars: " + safeMessagesJson.length());
 
-            // Safely parse JSON on JavaScript side to avoid syntax errors with newlines or quotes
             String js = String.format(
                     "try {" +
                     "  if (typeof window.sendPuterChat === 'function') {" +
@@ -284,7 +306,7 @@ public class HeadlessAudioBridge {
 
     public void dispatchFinished() {
         mainHandler.post(() -> {
-            isSessionActive = false;
+            // Model vocal turn completed; multi-turn session stays alive
             if (listener != null) listener.onCommentaryFinished();
         });
     }
@@ -293,6 +315,17 @@ public class HeadlessAudioBridge {
         mainHandler.post(() -> {
             isSessionActive = false;
             if (listener != null) listener.onSessionDisconnected();
+        });
+    }
+
+    public void dispatchSessionClosedWithTelemetry(int code, String reason, boolean wasClean) {
+        mainHandler.post(() -> {
+            isSessionActive = false;
+            LiveLogManager.getInstance().info("GEMINI_LIVE_BRIDGE", "Session Closed", 
+                    "Code: " + code + " | Reason: " + reason + " | Clean: " + wasClean);
+            if (listener != null) {
+                listener.onSessionClosedWithTelemetry(code, reason, wasClean);
+            }
         });
     }
 
