@@ -206,6 +206,10 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
     private final List<AIModelDefinition> allModelsList = new ArrayList<>();
     private final Map<String, List<AIModelDefinition>> modelsByProvider = new HashMap<>();
 
+    // Live Turn Deduplication Guards
+    private String lastRenderedUserText = "";
+    private long lastUserTextTimestamp = 0;
+
     // Activity Result Launchers
     private ActivityResultLauncher<String> galleryLauncher;
     private ActivityResultLauncher<String> documentLauncher;
@@ -499,7 +503,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         headlessAudioBridge = new HeadlessAudioBridge(this, headlessAudioWebView);
         webAppInterface.setAudioBridge(headlessAudioBridge);
 
-        // Ensure Android never throttles background JavaScript execution or audio streaming
         headlessAudioWebView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         headlessAudioWebView.setKeepScreenOn(true);
 
@@ -557,7 +560,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
 
             @Override
             public void onCommentaryFinished() {
-                // A single vocal turn finished; stream stays active for the next user voice turn
+                // Vocal turn completed; session remains active for user speech
                 LiveLogManager.getInstance().info("GEMINI_LIVE", "Vocal Turn Completed", "Microphone remains active for multi-turn input.");
             }
 
@@ -678,6 +681,10 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
     public void onLiveSessionConnected() {
         runOnUiThread(() -> {
             isLiveVoiceConnected = true;
+            lastRenderedUserText = "";
+            lastUserTextTimestamp = 0;
+            currentLiveAssistantMsg = null;
+
             if (tvLiveVoiceStatus != null) tvLiveVoiceStatus.setText(R.string.voice_status_listening);
             toggleStarAnimation(true);
             addSystemMessage("🟢 Connected to Gemini Live Model");
@@ -694,14 +701,26 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
 
     /**
      * Appends live user speech transcription as a native blue chat bubble on the right.
+     * Includes strict debounce & phrase deduplication to prevent doubled user bubbles.
      */
     public void onLiveUserTranscript(String text) {
         runOnUiThread(() -> {
             if (text == null || text.trim().isEmpty()) {
-                LiveLogManager.getInstance().warn("LIVE_TRANSCRIPT", "Dropped Empty User Speech", "Received empty or whitespace user transcript.");
+                LiveLogManager.getInstance().warn("LIVE_TRANSCRIPT", "Dropped Empty User Speech", "Received empty or null text from JS bridge.");
                 return;
             }
             String cleanText = text.trim();
+            long now = System.currentTimeMillis();
+
+            // Strict Deduplication Guard: Ignore if identical phrase arrives within 2.5 seconds
+            if (cleanText.equalsIgnoreCase(lastRenderedUserText) && (now - lastUserTextTimestamp) < 2500) {
+                LiveLogManager.getInstance().info("LIVE_TRANSCRIPT", "Duplicate User Speech Suppressed", 
+                        "Suppressed duplicate speech turn: \"" + cleanText + "\"");
+                return;
+            }
+
+            lastRenderedUserText = cleanText;
+            lastUserTextTimestamp = now;
 
             if (chatAdapter == null || currentSession == null) {
                 LiveLogManager.getInstance().error("LIVE_TRANSCRIPT", "UI State Error", "Cannot post user bubble: chatAdapter or currentSession is null.");
@@ -728,6 +747,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
 
     /**
      * Appends or updates live model vocalization as an assistant chat bubble on the left.
+     * Handles both streaming delta chunks and cumulative phrase updates seamlessly.
      */
     public void onLiveModelTranscript(String chunk, boolean isTurnFinished) {
         runOnUiThread(() -> {
@@ -738,7 +758,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                 }
 
                 if (chunk != null && !chunk.isEmpty()) {
-                    // Secondary safety filter: Strip out internal thought tokens completely
                     String clean = chunk.replaceAll("(?i)<thought[\\s\\S]*?</thought>", "")
                                         .replaceAll("(?i)<thinking[\\s\\S]*?</thinking>", "")
                                         .trim();
@@ -755,13 +774,20 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                             currentLiveAssistantMsg.setStreaming(true);
                             chatAdapter.addMessage(currentLiveAssistantMsg);
                             currentSession.addMessage(currentLiveAssistantMsg);
+                            LiveLogManager.getInstance().ok("LIVE_TRANSCRIPT", "Model Bubble Created", clean);
                         } else {
                             String existing = currentLiveAssistantMsg.getText();
-                            currentLiveAssistantMsg.setText((existing != null && !existing.isEmpty()) ? existing + " " + clean : clean);
+                            // Smart accumulator: check if chunk is cumulative or incremental delta
+                            if (existing != null && clean.startsWith(existing)) {
+                                currentLiveAssistantMsg.setText(clean);
+                            } else {
+                                String updated = (existing != null && !existing.isEmpty()) ? existing + " " + clean : clean;
+                                currentLiveAssistantMsg.setText(updated);
+                            }
                             chatAdapter.notifyItemChanged(chatAdapter.getItemCount() - 1);
+                            LiveLogManager.getInstance().ok("LIVE_TRANSCRIPT", "Model Bubble Updated", clean);
                         }
                         rvChatTimeline.smoothScrollToPosition(chatAdapter.getItemCount() - 1);
-                        LiveLogManager.getInstance().ok("LIVE_TRANSCRIPT", "Model Bubble Updated", clean);
                     }
                 }
 
@@ -786,6 +812,8 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                 currentLiveAssistantMsg.setStreaming(false);
                 currentLiveAssistantMsg = null;
             }
+            lastRenderedUserText = "";
+            lastUserTextTimestamp = 0;
 
             if (isLiveVoiceConnected) {
                 isLiveVoiceConnected = false;
@@ -818,8 +846,10 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                 currentLiveAssistantMsg.setStreaming(false);
                 currentLiveAssistantMsg = null;
             }
+            lastRenderedUserText = "";
+            lastUserTextTimestamp = 0;
 
-            LiveLogManager.getInstance().error("GEMINI_LIVE", "Live Session Error Encountered", err);
+            LiveLogManager.getInstance().error("GEMINI_LIVE", "Live Session Error Event", err);
             if (isLiveVoiceConnected) {
                 isLiveVoiceConnected = false;
                 if (tvLiveVoiceStatus != null) tvLiveVoiceStatus.setText(err);
@@ -2095,6 +2125,8 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                 currentLiveAssistantMsg.setStreaming(false);
                 currentLiveAssistantMsg = null;
             }
+            lastRenderedUserText = "";
+            lastUserTextTimestamp = 0;
             isLiveVoiceConnected = false;
             toggleStarAnimation(false);
             addSystemMessage("🔴 Disconnected from Live Model");
