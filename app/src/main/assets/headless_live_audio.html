@@ -12,7 +12,7 @@
  * Headless Live Audio, WebSocket & Puter SDK Bridge for Puter Unofficial
  * Exact Gemini Live BidiGenerateContent Audio Engine adopted from Puter11.
  * Pure Live Voice Character streaming (Puck, Aoede, etc.) over 24kHz PCM,
- * 16kHz hardware microphone capture, and deep Java telemetry.
+ * 16kHz hardware microphone capture, live speech transcription bubbles, and deep Java telemetry.
  */
 
 // =========================================================================
@@ -66,7 +66,7 @@ function sendLogToNative(level, tag, title, details) {
 
 
 // =========================================================================
-// GEMINI LIVE BIDIDIRECTIONAL AUDIO PIPELINE (EXACT OLD APP ARCHITECTURE)
+// GEMINI LIVE BIDIDIRECTIONAL AUDIO PIPELINE (WITH LIVE TRANSCRIPTION)
 // =========================================================================
 
 let liveWs = null;
@@ -74,10 +74,13 @@ let micAudioContext = null;
 let playbackAudioContext = null;
 let micMediaStream = null;
 let micScriptProcessor = null;
+let speechRecognizer = null;
 let isSessionActive = false;
 let nextPlaybackTime = 0;
 let isPuterChatAborted = false;
 let lastSyncedTokenToNative = null;
+let lastUserTranscript = "";
+let hasReceivedTextInCurrentTurn = false;
 
 window.startCommentarySession = function(scriptText, personaPrompt) {
     if (isSessionActive) {
@@ -86,8 +89,10 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
 
     const bridge = getBridge();
     const apiKey = bridge ? bridge.getGeminiApiKey() : "";
+    lastUserTranscript = "";
+    hasReceivedTextInCurrentTurn = false;
 
-    // 1. Resolve Exact Model Name (Old App Logic)
+    // 1. Resolve Exact Model Name
     let selectedModel = "";
     if (personaPrompt && typeof personaPrompt === "string" && personaPrompt.trim().length > 0 && personaPrompt !== "auto") {
         selectedModel = personaPrompt.trim();
@@ -125,7 +130,7 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
         return;
     }
 
-    // 4. Exact Old App Endpoint (v1alpha GenerativeService.BidiGenerateContent)
+    // 4. Endpoint with Live Bidirectional Streaming
     const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(apiKey.trim())}`;
     
     try {
@@ -141,7 +146,7 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
     liveWs.onopen = function() {
         sendLogToNative("OK", "GEMINI_LIVE", "WebSocket Connected", `ReadyState: ${liveWs.readyState} | Protocol: ${liveWs.protocol || 'None'}`);
 
-        // Construct Setup Payload matching the Old App configuration
+        // Setup Payload with Bidirectional Audio & Live Speech Transcription
         const setupPayload = {
             setup: {
                 model: "models/" + cleanModel,
@@ -154,7 +159,9 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                             }
                         }
                     }
-                }
+                },
+                inputAudioTranscription: {},
+                outputAudioTranscription: {}
             }
         };
 
@@ -203,11 +210,23 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                 return;
             }
 
-            // Process live audio and text content
+            // Process live audio, user transcription, and model transcription
             if (payload.serverContent) {
                 const content = payload.serverContent;
                 
-                // Barge-in interruption detection
+                // 1. Process User Speech Transcription from Google Live
+                if (content.inputTranscription && content.inputTranscription.text) {
+                    const rawUserText = content.inputTranscription.text.trim();
+                    if (rawUserText.length > 0 && rawUserText !== lastUserTranscript) {
+                        lastUserTranscript = rawUserText;
+                        sendLogToNative("OK", "LIVE_TRANSCRIPT", "User Spoken Text (Server)", rawUserText);
+                        if (bridge && bridge.onLiveUserTranscript) {
+                            bridge.onLiveUserTranscript(rawUserText);
+                        }
+                    }
+                }
+
+                // 2. Barge-in interruption detection
                 if (content.interrupted) {
                     nextPlaybackTime = 0;
                     sendLogToNative("WARN", "GEMINI_LIVE", "Barge-In Interruption", "Server detected user speech; halting active audio playback.");
@@ -216,12 +235,37 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                     }
                 }
 
+                // 3. Process Model Turn (Audio + Filtered Spoken Text)
                 if (content.modelTurn && content.modelTurn.parts) {
                     for (const part of content.modelTurn.parts) {
-                        // Live text transcription turn
-                        if (part.text && bridge && bridge.onLiveCommentaryText) {
-                            bridge.onLiveCommentaryText(part.text);
+                        // FILTER: Skip internal model thoughts/reasoning completely
+                        if (part.thought === true) {
+                            continue;
                         }
+
+                        // Live text transcription of what is spoken
+                        if (part.text) {
+                            // Strip any internal thought or thinking tags
+                            let cleanSpokenText = part.text
+                                .replace(/<thought[\s\S]*?<\/thought>/gi, '')
+                                .replace(/<thinking[\s\S]*?<\/thinking>/gi, '')
+                                .trim();
+
+                            if (cleanSpokenText.length > 0) {
+                                hasReceivedTextInCurrentTurn = true;
+                                sendLogToNative("OK", "LIVE_TRANSCRIPT", "Model Spoken Text (Spoken)", cleanSpokenText);
+                                
+                                // Forward to ticker HUD
+                                if (bridge && bridge.onLiveCommentaryText) {
+                                    bridge.onLiveCommentaryText(cleanSpokenText);
+                                }
+                                // Forward to native timeline for Assistant Chat Bubble
+                                if (bridge && bridge.onLiveModelTranscript) {
+                                    bridge.onLiveModelTranscript(cleanSpokenText, false);
+                                }
+                            }
+                        }
+
                         // Live PCM audio waveform turn
                         if (part.inlineData && part.inlineData.mimeType && part.inlineData.mimeType.startsWith("audio/")) {
                             const base64Audio = part.inlineData.data;
@@ -233,9 +277,20 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
                     }
                 }
 
-                // Turn completed: Do NOT close socket, microphone remains open
+                // 4. Turn completed
                 if (content.turnComplete) {
                     sendLogToNative("INFO", "GEMINI_LIVE", "Turn Complete", "Model vocalization turn finished. Stream remains active for user input.");
+                    
+                    // Commit/finalize the model bubble in native timeline
+                    if (bridge && bridge.onLiveModelTranscript) {
+                        bridge.onLiveModelTranscript("", true);
+                    }
+
+                    // Diagnostic check: If model spoke audio but no transcript arrived
+                    if (!hasReceivedTextInCurrentTurn) {
+                        sendLogToNative("WARN", "LIVE_TRANSCRIPT", "Missing Text Transcript in Turn", "Audio played, but server provided no text parts for bubble.");
+                    }
+                    hasReceivedTextInCurrentTurn = false;
                 }
             }
 
@@ -264,7 +319,6 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
         isSessionActive = false;
         cleanupAudio();
         
-        // Notify native bridge with full close code telemetry
         if (bridge && bridge.onLiveSessionClosedWithTelemetry) {
             bridge.onLiveSessionClosedWithTelemetry(event.code, event.reason || "Socket closed by remote host", event.wasClean);
         } else if (bridge && bridge.onLiveCommentaryFinished) {
@@ -275,7 +329,6 @@ window.startCommentarySession = function(scriptText, personaPrompt) {
 
 function sendTextMessage(text) {
     if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
-    // Updated to realtimeInput.text for Gemini 3.1 & 2.5 wire compatibility
     const msg = {
         realtimeInput: {
             text: text
@@ -287,7 +340,6 @@ function sendTextMessage(text) {
 window.groundTargetWithVision = function(base64Jpg, targetId, desc) {
     if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
     const cleanBase64 = base64Jpg.replace(/^data:image\/[a-z]+;base64,/, '');
-    // Updated from deprecated mediaChunks to direct video wire format
     const msg = {
         realtimeInput: {
             video: {
@@ -320,6 +372,10 @@ window.stopCommentarySession = function() {
 };
 
 function cleanupAudio() {
+    if (speechRecognizer) {
+        try { speechRecognizer.stop(); } catch(e) {}
+        speechRecognizer = null;
+    }
     if (micMediaStream) {
         try { 
             micMediaStream.getTracks().forEach(t => t.stop()); 
@@ -350,7 +406,6 @@ function initMicrophoneCapture() {
         return;
     }
 
-    // Hardware audio constraints adopted directly from the Old App
     const audioConstraints = {
         audio: {
             channelCount: 1,
@@ -394,7 +449,6 @@ function initMicrophoneCapture() {
                 }
                 const base64Pcm = btoa(binary);
 
-                // FIXED: Direct 'audio' field format required by Google Live API (resolves Code 1007)
                 const realtimeInput = {
                     realtimeInput: {
                         audio: {
@@ -418,6 +472,9 @@ function initMicrophoneCapture() {
             source.connect(processor);
             processor.connect(micAudioContext.destination);
             micScriptProcessor = processor;
+
+            // Client-side Web Speech ASR for instant real-time user transcription bubbles
+            initClientSpeechRecognition();
         })
         .catch(err => {
             const micErr = `Microphone access failure: ${err.name} - ${err.message}`;
@@ -425,6 +482,52 @@ function initMicrophoneCapture() {
             const bridge = getBridge();
             if (bridge && bridge.onLiveError) bridge.onLiveError(micErr);
         });
+}
+
+function initClientSpeechRecognition() {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
+        sendLogToNative("INFO", "LIVE_TRANSCRIPT", "Web Speech API Not Available", "Relying on server-side inputAudioTranscription.");
+        return;
+    }
+
+    try {
+        speechRecognizer = new SpeechRec();
+        speechRecognizer.continuous = true;
+        speechRecognizer.interimResults = false;
+        speechRecognizer.lang = "en-US";
+
+        speechRecognizer.onresult = function(event) {
+            if (!isSessionActive) return;
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                if (event.results[i].isFinal) {
+                    const spoke = event.results[i][0].transcript.trim();
+                    if (spoke.length > 0 && spoke !== lastUserTranscript) {
+                        lastUserTranscript = spoke;
+                        sendLogToNative("OK", "LIVE_TRANSCRIPT", "User Spoken Text (Client ASR)", spoke);
+                        const bridge = getBridge();
+                        if (bridge && bridge.onLiveUserTranscript) {
+                            bridge.onLiveUserTranscript(spoke);
+                        }
+                    }
+                }
+            }
+        };
+
+        speechRecognizer.onerror = function(e) {
+            sendLogToNative("INFO", "LIVE_TRANSCRIPT", "Client Speech Recognition Notice", e.error || "Recognition paused");
+        };
+
+        speechRecognizer.onend = function() {
+            if (isSessionActive && speechRecognizer) {
+                try { speechRecognizer.start(); } catch(e) {}
+            }
+        };
+
+        speechRecognizer.start();
+    } catch(e) {
+        sendLogToNative("INFO", "LIVE_TRANSCRIPT", "Speech Recognition Initialization Skipped", e.message || String(e));
+    }
 }
 
 function playAudioChunk(base64Pcm) {
