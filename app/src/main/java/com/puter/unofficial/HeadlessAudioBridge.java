@@ -28,6 +28,8 @@ public class HeadlessAudioBridge {
     public interface LiveAudioEventListener {
         void onSessionConnected();
         void onTranscriptReceived(String text);
+        default void onUserTranscriptReceived(String text) {}
+        default void onModelTranscriptReceived(String text, boolean isFinished) {}
         void onAudioChunkReceived(String base64Pcm);
         void onCommentaryFinished();
         default void onSessionDisconnected() {}
@@ -298,6 +300,28 @@ public class HeadlessAudioBridge {
         });
     }
 
+    public void dispatchUserTranscript(String text) {
+        mainHandler.post(() -> {
+            if (listener != null) {
+                listener.onUserTranscriptReceived(text);
+            } else {
+                LiveLogManager.getInstance().warn("LIVE_TRANSCRIPT", "Bridge Dispatch Warning", 
+                        "LiveAudioEventListener is null when dispatching user transcript: " + text);
+            }
+        });
+    }
+
+    public void dispatchModelTranscript(String text, boolean isFinished) {
+        mainHandler.post(() -> {
+            if (listener != null) {
+                listener.onModelTranscriptReceived(text, isFinished);
+            } else {
+                LiveLogManager.getInstance().warn("LIVE_TRANSCRIPT", "Bridge Dispatch Warning", 
+                        "LiveAudioEventListener is null when dispatching model transcript.");
+            }
+        });
+    }
+
     public void dispatchAudioChunk(String base64Pcm) {
         mainHandler.post(() -> {
             if (listener != null) listener.onAudioChunkReceived(base64Pcm);
@@ -306,7 +330,6 @@ public class HeadlessAudioBridge {
 
     public void dispatchFinished() {
         mainHandler.post(() -> {
-            // Model vocal turn completed; multi-turn session stays alive
             if (listener != null) listener.onCommentaryFinished();
         });
     }
