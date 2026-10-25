@@ -304,6 +304,7 @@ public class HeadlessAudioBridge {
         mainHandler.post(() -> {
             if (listener != null) {
                 listener.onUserTranscriptReceived(text);
+                LiveLogManager.getInstance().ok("LIVE_TRANSCRIPT", "Bridge Dispatched User Transcript", text);
             } else {
                 LiveLogManager.getInstance().warn("LIVE_TRANSCRIPT", "Bridge Dispatch Warning", 
                         "LiveAudioEventListener is null when dispatching user transcript: " + text);
@@ -315,6 +316,9 @@ public class HeadlessAudioBridge {
         mainHandler.post(() -> {
             if (listener != null) {
                 listener.onModelTranscriptReceived(text, isFinished);
+                if (text != null && !text.isEmpty()) {
+                    LiveLogManager.getInstance().ok("LIVE_TRANSCRIPT", "Bridge Dispatched Model Transcript", text);
+                }
             } else {
                 LiveLogManager.getInstance().warn("LIVE_TRANSCRIPT", "Bridge Dispatch Warning", 
                         "LiveAudioEventListener is null when dispatching model transcript.");
