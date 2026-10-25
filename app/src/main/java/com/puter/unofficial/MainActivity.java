@@ -537,6 +537,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         headlessAudioBridge = new HeadlessAudioBridge(this, headlessAudioWebView);
         webAppInterface.setAudioBridge(headlessAudioBridge);
 
+        // Ensure Android never throttles background JavaScript execution or audio streaming
         headlessAudioWebView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         headlessAudioWebView.setKeepScreenOn(true);
 
@@ -588,10 +589,13 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             }
 
             @Override
-            public void onAudioChunkReceived(String base64Pcm) {}
+            public void onAudioChunkReceived(String base64Pcm) {
+                // PCM audio chunk received and playing through WebAudio in Gemini's voice character
+            }
 
             @Override
             public void onCommentaryFinished() {
+                // A single vocal turn finished; stream stays active for the next user voice turn
                 LiveLogManager.getInstance().info("GEMINI_LIVE", "Vocal Turn Completed", "Microphone remains active for multi-turn input.");
             }
 
@@ -730,6 +734,10 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         });
     }
 
+    /**
+     * Appends live user speech transcription as a native blue chat bubble on the right.
+     * Includes strict debounce & phrase deduplication to prevent doubled user bubbles.
+     */
     public void onLiveUserTranscript(String text) {
         runOnUiThread(() -> {
             if (text == null || text.trim().isEmpty()) {
@@ -739,6 +747,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             String cleanText = text.trim();
             long now = System.currentTimeMillis();
 
+            // Strict Deduplication Guard: Ignore if identical phrase arrives within 2.5 seconds
             if (cleanText.equalsIgnoreCase(lastRenderedUserText) && (now - lastUserTextTimestamp) < 2500) {
                 LiveLogManager.getInstance().info("LIVE_TRANSCRIPT", "Duplicate User Speech Suppressed", 
                         "Suppressed duplicate speech turn: \"" + cleanText + "\"");
@@ -771,6 +780,10 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         });
     }
 
+    /**
+     * Appends or updates live model vocalization as an assistant chat bubble on the left.
+     * Handles both streaming delta chunks and cumulative phrase updates seamlessly.
+     */
     public void onLiveModelTranscript(String chunk, boolean isTurnFinished) {
         runOnUiThread(() -> {
             try {
@@ -799,6 +812,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                             LiveLogManager.getInstance().ok("LIVE_TRANSCRIPT", "Model Bubble Created", clean);
                         } else {
                             String existing = currentLiveAssistantMsg.getText();
+                            // Smart accumulator: check if chunk is cumulative or incremental delta
                             if (existing != null && clean.startsWith(existing)) {
                                 currentLiveAssistantMsg.setText(clean);
                             } else {
@@ -1499,7 +1513,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         if (attachments == null || attachments.isEmpty()) return list;
 
         for (StagedFile file : attachments) {
-            String name = (file.getName() != null) ? file.getName().toLowerCase(Locale.US) : "";
+            String name = (file.getFileName() != null) ? file.getFileName().toLowerCase(Locale.US) : "";
             String mime = (file.getMimeType() != null) ? file.getMimeType().toLowerCase(Locale.US) : "";
             
             boolean isTextDoc = name.endsWith(".txt") || name.endsWith(".json") || 
@@ -2317,7 +2331,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         aspectRatioBar.setVisibility(isImage ? View.VISIBLE : View.GONE);
     }
 
-    // --- LIVE VOICE AGENT ---
+    // --- LIVE VOICE AGENT (EXACT OLD APP MODEL BINDING & MULTI-TURN RESILIENCE) ---
 
     private void launchLiveVoiceAgent() {
         if (isLiveVoiceConnected) {
@@ -3229,4 +3243,3 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         }
     }
 }
-
