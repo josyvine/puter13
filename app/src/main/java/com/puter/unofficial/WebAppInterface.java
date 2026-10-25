@@ -146,8 +146,7 @@ public class WebAppInterface {
     public void onPuterStreamChunk(String chunk) {
         if (audioBridge != null) {
             audioBridge.dispatchPuterChunk(chunk);
-        }
-        if (mainActivity != null) {
+        } else if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onPuterChunkReceived(chunk));
         }
     }
@@ -156,8 +155,7 @@ public class WebAppInterface {
     public void onPuterStreamComplete(String fullResponse) {
         if (audioBridge != null) {
             audioBridge.dispatchPuterComplete(fullResponse);
-        }
-        if (mainActivity != null) {
+        } else if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onPuterGenerationComplete(fullResponse));
         }
     }
@@ -166,8 +164,7 @@ public class WebAppInterface {
     public void onPuterImageResult(String imageUrl) {
         if (audioBridge != null) {
             audioBridge.dispatchPuterImage(imageUrl);
-        }
-        if (mainActivity != null) {
+        } else if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onPuterImageReceived(imageUrl));
         }
     }
@@ -176,8 +173,7 @@ public class WebAppInterface {
     public void onPuterLiveModelsResult(String modelsJson) {
         if (audioBridge != null) {
             audioBridge.dispatchPuterModels(modelsJson);
-        }
-        if (mainActivity != null) {
+        } else if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onPuterLiveModelsReceived(modelsJson));
         }
     }
@@ -186,8 +182,7 @@ public class WebAppInterface {
     public void onPuterError(String errorMessage) {
         if (audioBridge != null) {
             audioBridge.dispatchPuterError(errorMessage);
-        }
-        if (mainActivity != null) {
+        } else if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onPuterGenerationError(errorMessage));
         }
     }
@@ -199,8 +194,7 @@ public class WebAppInterface {
         logger.ok("GEMINI_LIVE", "Session Connected", "WebSocket Bidi link successfully established.");
         if (audioBridge != null) {
             audioBridge.dispatchConnected();
-        }
-        if (mainActivity != null) {
+        } else if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onLiveSessionConnected());
         }
     }
@@ -216,14 +210,14 @@ public class WebAppInterface {
     public void onLiveCommentaryText(String text) {
         if (audioBridge != null) {
             audioBridge.dispatchTranscript(text);
-        }
-        if (mainActivity != null) {
+        } else if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onLiveTranscriptReceived(text));
         }
     }
 
     /**
      * Bridges transcribed user speech to display on the right as a blue chat bubble.
+     * Single-dispatch via audioBridge ensures exactly one invocation.
      */
     @JavascriptInterface
     public void onLiveUserTranscript(String text) {
@@ -233,26 +227,27 @@ public class WebAppInterface {
         }
         String clean = text.trim();
         logger.ok("LIVE_TRANSCRIPT", "User Transcript from JS", clean);
+
         if (audioBridge != null) {
             audioBridge.dispatchUserTranscript(clean);
-        }
-        if (mainActivity != null) {
+        } else if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onLiveUserTranscript(clean));
         }
     }
 
     /**
      * Bridges clean model spoken words to display on the left as an assistant chat bubble.
+     * Single-dispatch via audioBridge ensures exactly one invocation.
      */
     @JavascriptInterface
     public void onLiveModelTranscript(String text, boolean isTurnFinished) {
         if (text != null && !text.trim().isEmpty()) {
             logger.ok("LIVE_TRANSCRIPT", "Model Transcript from JS", text.trim());
         }
+
         if (audioBridge != null) {
             audioBridge.dispatchModelTranscript(text, isTurnFinished);
-        }
-        if (mainActivity != null) {
+        } else if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onLiveModelTranscript(text, isTurnFinished));
         }
     }
@@ -276,8 +271,7 @@ public class WebAppInterface {
 
         if (audioBridge != null) {
             audioBridge.dispatchSessionClosedWithTelemetry(code, reason, wasClean);
-        }
-        if (mainActivity != null) {
+        } else if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onLiveSessionClosedWithTelemetry(code, reason, wasClean));
         }
     }
@@ -287,8 +281,7 @@ public class WebAppInterface {
         logger.error("GEMINI_LIVE", "Live Session Error Event", err != null ? err : "Unknown error");
         if (audioBridge != null) {
             audioBridge.dispatchError(err);
-        }
-        if (mainActivity != null) {
+        } else if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onLiveError(err));
         }
     }
