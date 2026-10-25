@@ -222,9 +222,43 @@ public class WebAppInterface {
         }
     }
 
+    /**
+     * Bridges transcribed user speech to display on the right as a blue chat bubble.
+     */
+    @JavascriptInterface
+    public void onLiveUserTranscript(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            logger.warn("LIVE_TRANSCRIPT", "Dropped Empty User Speech", "Received empty or null text from JS bridge.");
+            return;
+        }
+        String clean = text.trim();
+        logger.ok("LIVE_TRANSCRIPT", "User Transcript from JS", clean);
+        if (audioBridge != null) {
+            audioBridge.dispatchUserTranscript(clean);
+        }
+        if (mainActivity != null) {
+            mainActivity.runOnUiThread(() -> mainActivity.onLiveUserTranscript(clean));
+        }
+    }
+
+    /**
+     * Bridges clean model spoken words to display on the left as an assistant chat bubble.
+     */
+    @JavascriptInterface
+    public void onLiveModelTranscript(String text, boolean isTurnFinished) {
+        if (text != null && !text.trim().isEmpty()) {
+            logger.ok("LIVE_TRANSCRIPT", "Model Transcript from JS", text.trim());
+        }
+        if (audioBridge != null) {
+            audioBridge.dispatchModelTranscript(text, isTurnFinished);
+        }
+        if (mainActivity != null) {
+            mainActivity.runOnUiThread(() -> mainActivity.onLiveModelTranscript(text, isTurnFinished));
+        }
+    }
+
     @JavascriptInterface
     public void onLiveCommentaryFinished() {
-        // Individual turn finished; log event and keep session alive for continuous speech
         logger.info("GEMINI_LIVE", "Vocal Turn Completed", "Model finished speaking turn. Microphone active for reply.");
         if (audioBridge != null) {
             audioBridge.dispatchFinished();
