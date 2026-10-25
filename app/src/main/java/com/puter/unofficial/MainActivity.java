@@ -595,7 +595,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
 
             @Override
             public void onCommentaryFinished() {
-                // A single vocal turn finished; stream stays active for the next user voice turn
+                // Vocal turn completed; session remains active for user speech
                 LiveLogManager.getInstance().info("GEMINI_LIVE", "Vocal Turn Completed", "Microphone remains active for multi-turn input.");
             }
 
@@ -1451,7 +1451,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
 
         boolean urlContextEnabled = prefs.getBoolean(AppConstants.KEY_URL_CONTEXT_ENABLED, false);
 
-        // --- PUTER14 HIGH-SPEED MULTI-BATCH CONTEXT URL PROCESSING ---
+        // --- HIGH-SPEED MULTI-BATCH CONTEXT URL PROCESSING ---
         if (urlContextEnabled) {
             List<String> promptUrls = extractAndSanitizeUrls(finalPrompt);
             List<String> attachmentUrls = extractUrlsFromAttachments(attachments);
@@ -1479,7 +1479,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
     }
 
     /**
-     * Extracts and sanitizes URLs matching Puter14 logic: strips bullets, whitespace, trailing punctuation.
+     * Extracts and sanitizes URLs: strips bullets, whitespace, trailing punctuation.
      */
     private List<String> extractAndSanitizeUrls(String text) {
         List<String> list = new ArrayList<>();
@@ -1513,7 +1513,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         if (attachments == null || attachments.isEmpty()) return list;
 
         for (StagedFile file : attachments) {
-            String name = (file.getFileName() != null) ? file.getFileName().toLowerCase(Locale.US) : "";
+            String name = (file.getName() != null) ? file.getName().toLowerCase(Locale.US) : "";
             String mime = (file.getMimeType() != null) ? file.getMimeType().toLowerCase(Locale.US) : "";
             
             boolean isTextDoc = name.endsWith(".txt") || name.endsWith(".json") || 
