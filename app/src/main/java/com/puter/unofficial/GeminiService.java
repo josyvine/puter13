@@ -2,10 +2,12 @@ package com.puter.unofficial;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
+import com.puter.unofficial.logging.LiveLogManager;
 import com.puter.unofficial.models.GroundingSource;
 
 import org.json.JSONArray;
@@ -15,7 +17,6 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -37,8 +38,8 @@ import okhttp3.ResponseBody;
 /**
  * Native Network Service for Google Gemini APIs.
  * Pure Java implementation with direct Java callback listeners.
- * Handles background REST, streaming execution, active call cancellation,
- * URL context extraction/fetching, and live model discovery utilizing OkHttp.
+ * Handles background REST, SSE streaming execution, active call cancellation,
+ * official url_context tool declaration, urlContextMetadata extraction, and live model discovery.
  */
 public class GeminiService {
 
@@ -82,6 +83,7 @@ public class GeminiService {
         synchronized (callLock) {
             if (activeCall != null && !activeCall.isCanceled()) {
                 Log.d(TAG, "Aborting active Gemini network call.");
+                LiveLogManager.getInstance().info("GEMINI_NETWORK", "Call Canceled", "User aborted active network request.");
                 activeCall.cancel();
                 activeCall = null;
             }
@@ -91,11 +93,13 @@ public class GeminiService {
     public void executeCall(final String modelId, final String payloadJson, final boolean isStream, final GeminiStreamListener listener) {
         executorService.execute(() -> {
             Call call = null;
+            long requestStartTime = System.currentTimeMillis();
             try {
-                // 1. Guard against non-Gemini router models accidentally routed to Google API
                 if (isNonGeminiModel(modelId)) {
-                    deliverError(listener, "Invalid model for Google Gemini API: " + modelId + 
-                            ". This model belongs to Puter/OpenRouter. Please switch active provider to Puter.");
+                    String err = "Invalid model for Google Gemini API: " + modelId + 
+                            ". This model belongs to Puter/OpenRouter. Please switch active provider to Puter.";
+                    LiveLogManager.getInstance().error("GEMINI_NETWORK", "Model Routing Violation", err);
+                    deliverError(listener, err);
                     return;
                 }
 
@@ -114,6 +118,9 @@ public class GeminiService {
                 String action = isStream ? ":streamGenerateContent?alt=sse&key=" : ":generateContent?key=";
                 String targetUrl = baseUrl + action + apiKey;
 
+                LiveLogManager.getInstance().process("GEMINI_NETWORK", "Dispatching Gemini Call",
+                        "Model: " + sanitizedModel + " | Stream: " + isStream + " | Payload: " + cleanPayload.length() + " chars");
+
                 MediaType mediaType = MediaType.parse("application/json; charset=utf-8");
                 RequestBody body = RequestBody.create(cleanPayload, mediaType);
 
@@ -129,24 +136,31 @@ public class GeminiService {
                 }
 
                 Response response = call.execute();
+                long latency = System.currentTimeMillis() - requestStartTime;
 
                 if (!response.isSuccessful()) {
                     String errorText = response.body() != null ? response.body().string() : "Empty response body";
+                    String diag = "HTTP " + response.code() + " (" + latency + "ms): " + errorText;
+                    LiveLogManager.getInstance().error("GEMINI_NETWORK", "Server Error Response", diag);
                     deliverError(listener, "HTTP " + response.code() + ": " + errorText);
                     return;
                 }
 
                 ResponseBody responseBody = response.body();
                 if (responseBody == null) {
+                    LiveLogManager.getInstance().error("GEMINI_NETWORK", "Empty Body", "HTTP " + response.code() + " returned null body.");
                     deliverError(listener, "Response body was empty.");
                     return;
                 }
 
+                LiveLogManager.getInstance().ok("GEMINI_NETWORK", "HTTP " + response.code() + " OK",
+                        "Handshake Latency: " + latency + "ms | Processing response stream...");
+
                 if (isStream) {
-                    parseStreamResponse(responseBody, listener);
+                    parseStreamResponse(responseBody, listener, requestStartTime);
                 } else {
                     String responseData = responseBody.string();
-                    parseSingleResponse(responseData, listener);
+                    parseSingleResponse(responseData, listener, requestStartTime);
                 }
 
             } catch (IOException e) {
@@ -154,8 +168,11 @@ public class GeminiService {
                     deliverError(listener, "Request canceled.");
                     return;
                 }
+                long duration = System.currentTimeMillis() - requestStartTime;
+                LiveLogManager.getInstance().error("GEMINI_NETWORK", "Connection Failed (" + duration + "ms)", e.getMessage());
                 deliverError(listener, "Connection failed: " + e.getMessage());
             } catch (Exception ex) {
+                LiveLogManager.getInstance().error("GEMINI_NETWORK", "Processing Exception", ex.getMessage());
                 deliverError(listener, "Processing error: " + ex.getMessage());
             } finally {
                 synchronized (callLock) {
@@ -186,11 +203,15 @@ public class GeminiService {
         return cleaned;
     }
 
-    private void parseSingleResponse(String jsonStr, GeminiStreamListener listener) {
+    private void parseSingleResponse(String jsonStr, GeminiStreamListener listener, long requestStartTime) {
         try {
             JSONObject root = new JSONObject(jsonStr);
             String text = extractTextFromGeminiJson(root);
             List<GroundingSource> citations = extractCitations(root);
+            long totalDuration = System.currentTimeMillis() - requestStartTime;
+
+            LiveLogManager.getInstance().ok("GEMINI_NETWORK", "Single-Turn Complete (" + totalDuration + "ms)",
+                    "Response: " + text.length() + " chars | Citations: " + (citations != null ? citations.size() : 0));
 
             mainHandler.post(() -> {
                 if (citations != null && !citations.isEmpty()) {
@@ -199,16 +220,18 @@ public class GeminiService {
                 listener.onComplete(text);
             });
         } catch (Exception e) {
+            LiveLogManager.getInstance().error("GEMINI_NETWORK", "JSON Parse Error", e.getMessage());
             deliverError(listener, "Failed to parse Gemini response: " + e.getMessage());
         }
     }
 
-    private void parseStreamResponse(ResponseBody responseBody, GeminiStreamListener listener) {
+    private void parseStreamResponse(ResponseBody responseBody, GeminiStreamListener listener, long requestStartTime) {
         InputStream inputStream = responseBody.byteStream();
         BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
         String line;
         StringBuilder fullAccumulator = new StringBuilder();
         List<GroundingSource> allCitations = new ArrayList<>();
+        boolean firstChunkReceived = false;
 
         try {
             while ((line = reader.readLine()) != null) {
@@ -220,15 +243,36 @@ public class GeminiService {
                         JSONObject chunkObj = new JSONObject(data);
                         String text = extractTextFromGeminiJson(chunkObj);
                         List<GroundingSource> citations = extractCitations(chunkObj);
-                        if (citations != null) allCitations.addAll(citations);
+                        
+                        if (citations != null && !citations.isEmpty()) {
+                            for (GroundingSource src : citations) {
+                                boolean exists = false;
+                                for (GroundingSource existing : allCitations) {
+                                    if (existing.getUrl().equalsIgnoreCase(src.getUrl())) {
+                                        exists = true;
+                                        break;
+                                    }
+                                }
+                                if (!exists) allCitations.add(src);
+                            }
+                        }
 
                         if (text != null && !text.isEmpty()) {
+                            if (!firstChunkReceived) {
+                                firstChunkReceived = true;
+                                long ttft = System.currentTimeMillis() - requestStartTime;
+                                LiveLogManager.getInstance().ok("GEMINI_NETWORK", "First SSE Chunk (TTFT)", "Latency: " + ttft + "ms");
+                            }
                             fullAccumulator.append(text);
                             mainHandler.post(() -> listener.onChunk(text));
                         }
                     } catch (Exception ignored) {}
                 }
             }
+
+            long totalDuration = System.currentTimeMillis() - requestStartTime;
+            LiveLogManager.getInstance().ok("GEMINI_NETWORK", "Streaming Complete (" + totalDuration + "ms)",
+                    "Total response: " + fullAccumulator.length() + " chars | Unique Citations: " + allCitations.size());
 
             mainHandler.post(() -> {
                 if (!allCitations.isEmpty()) {
@@ -243,6 +287,7 @@ public class GeminiService {
                     return;
                 }
             }
+            LiveLogManager.getInstance().error("GEMINI_NETWORK", "Streaming Stream Dropped", e.getMessage());
             deliverError(listener, "Streaming interrupted: " + e.getMessage());
         } finally {
             try { reader.close(); } catch (IOException ignored) {}
@@ -271,45 +316,102 @@ public class GeminiService {
         return "";
     }
 
+    /**
+     * Extracts grounding citations from both Google Search and official Gemini urlContextMetadata.
+     */
     private List<GroundingSource> extractCitations(JSONObject root) {
         List<GroundingSource> list = new ArrayList<>();
         try {
-            if (root.has("candidates")) {
-                JSONArray candidates = root.getJSONArray("candidates");
-                if (candidates.length() > 0) {
-                    JSONObject cand = candidates.getJSONObject(0);
-                    if (cand.has("groundingMetadata")) {
-                        JSONObject gm = cand.getJSONObject("groundingMetadata");
-                        if (gm.has("groundingChunks")) {
-                            JSONArray chunks = gm.getJSONArray("groundingChunks");
-                            for (int i = 0; i < chunks.length(); i++) {
-                                JSONObject c = chunks.getJSONObject(i);
-                                if (c.has("web")) {
-                                    JSONObject w = c.getJSONObject("web");
-                                    String uri = w.optString("uri", "");
-                                    String title = w.optString("title", uri);
-                                    list.add(new GroundingSource(uri, title, "", ""));
-                                }
+            if (!root.has("candidates")) return list;
+            JSONArray candidates = root.getJSONArray("candidates");
+            if (candidates.length() == 0) return list;
+
+            JSONObject cand = candidates.getJSONObject(0);
+
+            // 1. Official Google Gemini URL Context Metadata (urlContextMetadata)
+            if (cand.has("urlContextMetadata")) {
+                JSONObject ucm = cand.getJSONObject("urlContextMetadata");
+                if (ucm.has("urlMetadata")) {
+                    JSONArray urlArr = ucm.getJSONArray("urlMetadata");
+                    for (int i = 0; i < urlArr.length(); i++) {
+                        JSONObject uObj = urlArr.getJSONObject(i);
+                        String rawUrl = uObj.optString("retrievedUrl", uObj.optString("url", ""));
+                        if (!rawUrl.isEmpty()) {
+                            String domain = extractHostDomain(rawUrl);
+                            list.add(new GroundingSource(rawUrl, domain, "", ""));
+                            LiveLogManager.getInstance().ok("URL_CONTEXT", "Citation Extracted (urlContextMetadata)", rawUrl);
+                        }
+                    }
+                }
+            }
+
+            // 2. Google Search Grounding Metadata (groundingMetadata)
+            if (cand.has("groundingMetadata")) {
+                JSONObject gm = cand.getJSONObject("groundingMetadata");
+                if (gm.has("groundingChunks")) {
+                    JSONArray chunks = gm.getJSONArray("groundingChunks");
+                    for (int i = 0; i < chunks.length(); i++) {
+                        JSONObject c = chunks.getJSONObject(i);
+                        if (c.has("web")) {
+                            JSONObject w = c.getJSONObject("web");
+                            String uri = w.optString("uri", "");
+                            String title = w.optString("title", extractHostDomain(uri));
+                            if (!uri.isEmpty()) {
+                                list.add(new GroundingSource(uri, title, "", ""));
+                                LiveLogManager.getInstance().ok("URL_CONTEXT", "Citation Extracted (Search Grounding)", uri);
                             }
                         }
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            LiveLogManager.getInstance().warn("URL_CONTEXT", "Citation Parse Notice", e.getMessage());
+        }
         return list;
     }
 
+    private String extractHostDomain(String rawUrl) {
+        try {
+            Uri uri = Uri.parse(rawUrl);
+            String host = uri.getHost();
+            return (host != null && !host.isEmpty()) ? host : rawUrl;
+        } catch (Exception e) {
+            return rawUrl;
+        }
+    }
+
+    /**
+     * Sanitizes incoming payload, manages official url_context tools, and prevents schema rejection.
+     */
     private String processUrlContextAndCleanPayload(String rawPayloadJson) {
         try {
             JSONObject root = new JSONObject(rawPayloadJson);
 
-            boolean isUrlContextEnabled = false;
+            // Check if official Gemini url_context tool is declared in tools array
+            boolean hasOfficialUrlContextTool = false;
+            if (root.has("tools")) {
+                JSONArray tools = root.getJSONArray("tools");
+                for (int i = 0; i < tools.length(); i++) {
+                    JSONObject tool = tools.getJSONObject(i);
+                    if (tool.has("url_context") || tool.has("urlContext")) {
+                        hasOfficialUrlContextTool = true;
+                        break;
+                    }
+                }
+            }
+
+            // Strip internal non-schema boolean flag to avoid Google API HTTP 400 Bad Request
             if (root.has("urlContext")) {
-                isUrlContextEnabled = root.optBoolean("urlContext", false);
                 root.remove("urlContext");
             }
 
-            if (!isUrlContextEnabled || !root.has("contents")) {
+            // If prompt is already pre-compiled by MainActivity or official tool is active, pass payload cleanly
+            if (hasOfficialUrlContextTool || rawPayloadJson.contains("=== REPOSITORY & URL CONTEXT COMPILATION")) {
+                LiveLogManager.getInstance().ok("URL_CONTEXT", "Schema Validated", "Payload passed directly to Gemini engine.");
+                return root.toString();
+            }
+
+            if (!root.has("contents")) {
                 return root.toString();
             }
 
@@ -336,13 +438,12 @@ public class GeminiService {
                 }
             }
 
+            // Fallback scraping without hard 15-URL cap
             if (!detectedUrls.isEmpty()) {
                 StringBuilder fetchedContextBuilder = new StringBuilder();
                 int fetchedCount = 0;
-                int maxFetches = Math.min(detectedUrls.size(), 15);
 
-                for (int i = 0; i < maxFetches; i++) {
-                    String url = detectedUrls.get(i);
+                for (String url : detectedUrls) {
                     String fetchedData = fetchUrlContentDirectly(url);
                     if (fetchedData != null && !fetchedData.trim().isEmpty()) {
                         fetchedContextBuilder.append("\n\n--- START OF FILE CONTEXT [URL: ").append(url).append("] ---\n");
@@ -362,11 +463,13 @@ public class GeminiService {
                             fetchedContextBuilder.toString());
 
                     parts.put(contextPart);
+                    LiveLogManager.getInstance().ok("URL_CONTEXT", "Fallback Scraping Completed", "Injected " + fetchedCount + " source files.");
                 }
             }
 
             return root.toString();
         } catch (Exception e) {
+            LiveLogManager.getInstance().error("URL_CONTEXT", "Payload Cleaning Exception", e.getMessage());
             return rawPayloadJson;
         }
     }
@@ -375,7 +478,7 @@ public class GeminiService {
         try {
             Request req = new Request.Builder()
                     .url(url)
-                    .header("User-Agent", "Mozilla/5.0 (Android; Mobile; rv:120.0) Gecko/120.0 Firefox/120.0")
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PuterUnofficial/1.4")
                     .get()
                     .build();
 
@@ -383,7 +486,7 @@ public class GeminiService {
                 if (resp.isSuccessful() && resp.body() != null) {
                     String bodyStr = resp.body().string();
                     if (bodyStr.length() > 40000) {
-                        return bodyStr.substring(0, 40000) + "\n...[Content truncated for token safety]...";
+                        return bodyStr.substring(0, 40000) + "\n...[Content clamped for token safety]...";
                     }
                     return bodyStr;
                 }
@@ -414,15 +517,18 @@ public class GeminiService {
                 Response response = client.newCall(request).execute();
                 if (!response.isSuccessful()) {
                     String err = response.body() != null ? response.body().string() : "Empty error";
+                    LiveLogManager.getInstance().error("GEMINI_MODELS", "Model Fetch Failed", "HTTP " + response.code() + ": " + err);
                     mainHandler.post(() -> listener.onError("HTTP " + response.code() + ": " + err));
                     return;
                 }
 
                 ResponseBody body = response.body();
                 String json = body != null ? body.string() : "{}";
+                LiveLogManager.getInstance().ok("GEMINI_MODELS", "Models Fetched Successfully", "Length: " + json.length() + " chars");
                 mainHandler.post(() -> listener.onModelsFetched(json));
 
             } catch (Exception e) {
+                LiveLogManager.getInstance().error("GEMINI_MODELS", "Fetch Exception", e.getMessage());
                 mainHandler.post(() -> listener.onError(e.getMessage()));
             }
         });
