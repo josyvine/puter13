@@ -1513,7 +1513,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         if (attachments == null || attachments.isEmpty()) return list;
 
         for (StagedFile file : attachments) {
-            String name = (file.getName() != null) ? file.getName().toLowerCase(Locale.US) : "";
+            String name = (file.getFileName() != null) ? file.getFileName().toLowerCase(Locale.US) : "";
             String mime = (file.getMimeType() != null) ? file.getMimeType().toLowerCase(Locale.US) : "";
             
             boolean isTextDoc = name.endsWith(".txt") || name.endsWith(".json") || 
