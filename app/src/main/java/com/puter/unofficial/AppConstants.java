@@ -2,6 +2,8 @@ package com.puter.unofficial;
 
 /**
  * Centralized constants for the Puter Unofficial application.
+ * Manages preferences, official Google Gemini URL Context schemas,
+ * high-speed batch quotas, telemetry tags, and network timeouts.
  */
 public class AppConstants {
 
@@ -28,7 +30,7 @@ public class AppConstants {
     public static final String KEY_NOSTR_RELAY_URL = "puter_nostr_relay_url";
     public static final String KEY_EXTENSION_PUBLIC_ID = "puter_extension_public_id";
 
-    // --- GEMINI INTEGRATION ---
+    // --- GEMINI INTEGRATION & SETTINGS ---
     public static final String KEY_ACTIVE_PROVIDER = "puter_active_provider";
     public static final String KEY_GEMINI_API_KEY = "gemini_user_api_key";
     public static final String KEY_GEMINI_STREAMING = "gemini_streaming_enabled";
@@ -38,12 +40,21 @@ public class AppConstants {
     public static final String KEY_GEMINI_VOICE_CHARACTER = "gemini_voice_character";
     public static final String KEY_GEMINI_CACHED_LIVE_MODELS = "gemini_cached_live_models";
 
+    // --- OFFICIAL GOOGLE GEMINI URL CONTEXT & BATCHING CONFIGURATION ---
+    public static final String TOOL_URL_CONTEXT = "url_context";
+    public static final int URL_CONTEXT_BATCH_SIZE = 20; // Official Google request limit
+    public static final int URL_CONTEXT_MAX_CHARS_PER_URL = 40000; // 40KB stream-clamping threshold
+    public static final int URL_FETCH_CONNECT_TIMEOUT_SEC = 8;
+    public static final int URL_FETCH_READ_TIMEOUT_SEC = 10;
+    public static final int URL_PARALLEL_POOL_SIZE = 20;
+
     // --- USAGE TRACKING ---
     public static final String KEY_USAGE_TOTAL_TOKENS = "puter_usage_total_tokens";
     public static final String KEY_USAGE_TOTAL_COST = "puter_usage_total_cost";
 
     // --- ASSETS & URLS ---
     public static final String HEADLESS_AUDIO_URL = "file:///android_asset/headless_live_audio.html";
+    public static final String HEADLESS_ASSET_URL = "https://appassets.androidplatform.net/assets/headless_live_audio.html";
     public static final String LOCAL_INDEX_URL = "https://appassets.androidplatform.net/assets/index.html";
     public static final String LOCAL_BROWSER_URL = "file:///android_asset/browser.html";
     public static final String LOCAL_BOT_URL = "file:///android_asset/bot.html";
@@ -66,14 +77,17 @@ public class AppConstants {
     public static final int REQUEST_CODE_PERMISSIONS = 100;
     public static final int FILE_CHOOSER_RESULT_CODE = 1;
 
-    // --- BRIDGE NAMES ---
+    // --- BRIDGE NAMES & TTS ---
     public static final String JS_BRIDGE_NAME = "AndroidInterface";
     public static final String TTS_UTTERANCE_ID = "PuterTTS_ID";
 
-    // --- LOG TAGS ---
+    // --- LOG TAGS FOR SYSTEM LOG CONSOLE ---
     public static final String TAG_AUTH = "PuterAuth";
     public static final String TAG_VOICE = "PuterVoice";
     public static final String TAG_WEBVIEW = "PuterWebView";
+    public static final String TAG_URL_CONTEXT = "URL_CONTEXT";
+    public static final String TAG_LIVE_TRANSCRIPT = "LIVE_TRANSCRIPT";
+    public static final String TAG_GEMINI_NETWORK = "GEMINI_NETWORK";
 
     // --- WATCHER SERVICE CONFIGURATION ---
     public static final int WATCHER_NOTIFICATION_ID = 1002;
