@@ -2,6 +2,7 @@ package com.puter.unofficial;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.Uri;
 
 import com.puter.unofficial.models.ChatMessage;
 import com.puter.unofficial.models.ChatSession;
@@ -34,7 +35,7 @@ public class ChatSessionManager {
         return instance;
     }
 
-    public ChatSession createNewSession(String defaultModelId) {
+    public synchronized ChatSession createNewSession(String defaultModelId) {
         String sessionId = "session_" + System.currentTimeMillis();
         ChatSession session = new ChatSession(sessionId, "New Chat", System.currentTimeMillis());
         if (defaultModelId != null && !defaultModelId.isEmpty()) {
@@ -53,9 +54,12 @@ public class ChatSessionManager {
         prefs.edit().putString(KEY_CURRENT_SESSION_ID, sessionId).apply();
     }
 
-    public void saveSession(ChatSession session) {
+    public synchronized void saveSession(ChatSession session) {
         if (session == null || session.getId() == null) return;
         try {
+            long now = System.currentTimeMillis();
+            session.setUpdatedAt(now);
+
             JSONObject obj = new JSONObject();
             obj.put("id", session.getId());
             obj.put("title", session.getTitle());
@@ -78,18 +82,21 @@ public class ChatSessionManager {
             JSONArray msgs = new JSONArray();
             if (session.getMessages() != null) {
                 for (ChatMessage m : session.getMessages()) {
+                    if (m == null) continue;
                     JSONObject mj = new JSONObject();
                     mj.put("id", m.getId());
                     mj.put("role", m.getRole());
-                    mj.put("text", m.getText());
+                    mj.put("text", m.getText() != null ? m.getText() : "");
                     mj.put("timestamp", m.getTimestamp());
                     mj.put("isError", m.isError());
-                    mj.put("modelUsed", m.getModelUsed());
-                    mj.put("generatedImageUrl", m.getGeneratedImageUrl());
+                    mj.put("modelUsed", m.getModelUsed() != null ? m.getModelUsed() : "");
+                    mj.put("generatedImageUrl", m.getGeneratedImageUrl() != null ? m.getGeneratedImageUrl() : "");
 
+                    // Save citations
                     if (m.getGroundingSources() != null && !m.getGroundingSources().isEmpty()) {
                         JSONArray gArr = new JSONArray();
                         for (GroundingSource g : m.getGroundingSources()) {
+                            if (g == null) continue;
                             JSONObject gj = new JSONObject();
                             gj.put("url", g.getUrl());
                             gj.put("title", g.getTitle());
@@ -99,6 +106,22 @@ public class ChatSessionManager {
                         }
                         mj.put("citations", gArr);
                     }
+
+                    // Save staged attachments for persistent multi-turn media context
+                    if (m.getAttachments() != null && !m.getAttachments().isEmpty()) {
+                        JSONArray attArr = new JSONArray();
+                        for (StagedFile file : m.getAttachments()) {
+                            if (file == null) continue;
+                            JSONObject fj = new JSONObject();
+                            fj.put("filename", file.getFilename());
+                            fj.put("mimeType", file.getMimeType());
+                            fj.put("dataUri", file.getBase64DataUri());
+                            fj.put("fileSize", file.getFileSize());
+                            attArr.put(fj);
+                        }
+                        mj.put("attachments", attArr);
+                    }
+
                     msgs.put(mj);
                 }
             }
@@ -111,7 +134,7 @@ public class ChatSessionManager {
         }
     }
 
-    public ChatSession loadSession(String sessionId) {
+    public synchronized ChatSession loadSession(String sessionId) {
         if (sessionId == null) return null;
         String raw = prefs.getString("sess_" + sessionId, null);
         if (raw == null) return null;
@@ -123,7 +146,7 @@ public class ChatSessionManager {
                     obj.optLong("createdAt", System.currentTimeMillis())
             );
             session.setUpdatedAt(obj.optLong("updatedAt", session.getCreatedAt()));
-            session.setSelectedModelId(obj.optString("selectedModelId", "gpt-4o-mini"));
+            session.setSelectedModelId(obj.optString("selectedModelId", "gemini-2.0-flash"));
 
             if (obj.has("config")) {
                 JSONObject cfg = obj.getJSONObject("config");
@@ -150,7 +173,9 @@ public class ChatSessionManager {
                     m.setError(mj.optBoolean("isError", false));
                     m.setModelUsed(mj.optString("modelUsed", ""));
                     m.setGeneratedImageUrl(mj.optString("generatedImageUrl", ""));
+                    m.setStreaming(false);
 
+                    // Restore citations
                     if (mj.has("citations")) {
                         JSONArray gArr = mj.getJSONArray("citations");
                         List<GroundingSource> gsList = new ArrayList<>();
@@ -165,6 +190,25 @@ public class ChatSessionManager {
                         }
                         m.setGroundingSources(gsList);
                     }
+
+                    // Restore attachments
+                    if (mj.has("attachments")) {
+                        JSONArray attArr = mj.getJSONArray("attachments");
+                        List<StagedFile> fileList = new ArrayList<>();
+                        for (int j = 0; j < attArr.length(); j++) {
+                            JSONObject fj = attArr.getJSONObject(j);
+                            String fname = fj.optString("filename", "attachment");
+                            String mime = fj.optString("mimeType", "application/octet-stream");
+                            String dataUri = fj.optString("dataUri", null);
+                            long fsize = fj.optLong("fileSize", 0);
+
+                            Uri uri = (dataUri != null) ? Uri.parse(dataUri) : null;
+                            StagedFile sf = new StagedFile(uri, fname, mime, fsize, dataUri, null);
+                            fileList.add(sf);
+                        }
+                        m.setAttachments(fileList);
+                    }
+
                     list.add(m);
                 }
                 session.setMessages(list);
@@ -176,7 +220,7 @@ public class ChatSessionManager {
         }
     }
 
-    public List<ChatSession> getAllSessions() {
+    public synchronized List<ChatSession> getAllSessions() {
         List<String> ids = getSessionIdsIndex();
         List<ChatSession> list = new ArrayList<>();
         for (String id : ids) {
@@ -187,9 +231,11 @@ public class ChatSessionManager {
         return list;
     }
 
-    public void deleteSession(String sessionId) {
+    public synchronized void deleteSession(String sessionId) {
         if (sessionId == null) return;
+        // Permanently erase session memory and messages from disk
         prefs.edit().remove("sess_" + sessionId).apply();
+
         List<String> ids = getSessionIdsIndex();
         ids.remove(sessionId);
         saveSessionIdsIndex(ids);
@@ -199,7 +245,7 @@ public class ChatSessionManager {
         }
     }
 
-    public void autoUpdateTitleIfNeeded(ChatSession session, String firstPrompt) {
+    public synchronized void autoUpdateTitleIfNeeded(ChatSession session, String firstPrompt) {
         if (session == null || firstPrompt == null) return;
         if ("New Chat".equals(session.getTitle()) || session.getTitle().isEmpty()) {
             String title = firstPrompt.trim().replaceAll("\\s+", " ");
