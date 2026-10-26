@@ -39,7 +39,8 @@ import okhttp3.ResponseBody;
  * Native Network Service for Google Gemini APIs.
  * Pure Java implementation with direct Java callback listeners.
  * Handles background REST, SSE streaming execution, active call cancellation,
- * official url_context tool declaration, urlContextMetadata extraction, and live model discovery.
+ * multi-turn conversational history sanitization, official url_context tool declaration,
+ * urlContextMetadata extraction, and live model discovery.
  */
 public class GeminiService {
 
@@ -381,11 +382,80 @@ public class GeminiService {
     }
 
     /**
-     * Sanitizes incoming payload, manages official url_context tools, and prevents schema rejection.
+     * Sanitizes multi-turn payload sequences, isolates URL checks to the active prompt,
+     * strips disallowed flags, and prevents Google API schema rejections.
      */
     private String processUrlContextAndCleanPayload(String rawPayloadJson) {
         try {
             JSONObject root = new JSONObject(rawPayloadJson);
+
+            // Strip internal non-schema boolean flags to avoid Google API HTTP 400 Bad Request
+            if (root.has("urlContext")) {
+                root.remove("urlContext");
+            }
+
+            // Clean empty systemInstruction if present
+            if (root.has("systemInstruction")) {
+                JSONObject sysObj = root.optJSONObject("systemInstruction");
+                if (sysObj == null || !sysObj.has("parts") || sysObj.getJSONArray("parts").length() == 0) {
+                    root.remove("systemInstruction");
+                }
+            }
+
+            // Validate and sanitize multi-turn contents
+            if (!root.has("contents")) {
+                return root.toString();
+            }
+
+            JSONArray rawContents = root.getJSONArray("contents");
+            JSONArray sanitizedContents = new JSONArray();
+
+            for (int i = 0; i < rawContents.length(); i++) {
+                JSONObject turn = rawContents.getJSONObject(i);
+                String role = turn.optString("role", "user").toLowerCase(Locale.US);
+                if (!turn.has("parts")) continue;
+
+                JSONArray rawParts = turn.getJSONArray("parts");
+                JSONArray validParts = new JSONArray();
+
+                for (int p = 0; p < rawParts.length(); p++) {
+                    JSONObject part = rawParts.getJSONObject(p);
+                    if (part.has("text")) {
+                        String t = part.getString("text");
+                        if (!t.trim().isEmpty()) {
+                            validParts.put(part);
+                        }
+                    } else if (part.has("inlineData")) {
+                        validParts.put(part);
+                    }
+                }
+
+                if (validParts.length() == 0) continue;
+
+                // Ensure the first turn in contents is always "user"
+                if (sanitizedContents.length() == 0 && !"user".equals(role)) {
+                    continue;
+                }
+
+                // If consecutive turns have the same role, merge parts to prevent Gemini HTTP 400
+                if (sanitizedContents.length() > 0) {
+                    JSONObject prevTurn = sanitizedContents.getJSONObject(sanitizedContents.length() - 1);
+                    if (role.equals(prevTurn.optString("role"))) {
+                        JSONArray prevParts = prevTurn.getJSONArray("parts");
+                        for (int p = 0; p < validParts.length(); p++) {
+                            prevParts.put(validParts.get(p));
+                        }
+                        continue;
+                    }
+                }
+
+                JSONObject cleanTurn = new JSONObject();
+                cleanTurn.put("role", role);
+                cleanTurn.put("parts", validParts);
+                sanitizedContents.put(cleanTurn);
+            }
+
+            root.put("contents", sanitizedContents);
 
             // Check if official Gemini url_context tool is declared in tools array
             boolean hasOfficialUrlContextTool = false;
@@ -400,28 +470,19 @@ public class GeminiService {
                 }
             }
 
-            // Strip internal non-schema boolean flag to avoid Google API HTTP 400 Bad Request
-            if (root.has("urlContext")) {
-                root.remove("urlContext");
-            }
-
-            // If prompt is already pre-compiled by MainActivity or official tool is active, pass payload cleanly
+            // If prompt is already pre-compiled by MainActivity or official tool is active, pass cleanly
             if (hasOfficialUrlContextTool || rawPayloadJson.contains("=== REPOSITORY & URL CONTEXT COMPILATION")) {
-                LiveLogManager.getInstance().ok("URL_CONTEXT", "Schema Validated", "Payload passed directly to Gemini engine.");
+                LiveLogManager.getInstance().ok("URL_CONTEXT", "Schema Validated", "Multi-turn payload validated.");
                 return root.toString();
             }
 
-            if (!root.has("contents")) {
-                return root.toString();
-            }
+            // Fallback scraping: Only scan the LATEST user message in the session to avoid re-scraping past turns
+            if (sanitizedContents.length() > 0) {
+                JSONObject lastTurn = sanitizedContents.getJSONObject(sanitizedContents.length() - 1);
+                if ("user".equals(lastTurn.optString("role")) && lastTurn.has("parts")) {
+                    JSONArray parts = lastTurn.getJSONArray("parts");
+                    List<String> detectedUrls = new ArrayList<>();
 
-            JSONArray contents = root.getJSONArray("contents");
-            List<String> detectedUrls = new ArrayList<>();
-
-            for (int i = 0; i < contents.length(); i++) {
-                JSONObject turn = contents.getJSONObject(i);
-                if (turn.optString("role", "").equals("user") && turn.has("parts")) {
-                    JSONArray parts = turn.getJSONArray("parts");
                     for (int j = 0; j < parts.length(); j++) {
                         JSONObject part = parts.getJSONObject(j);
                         if (part.has("text")) {
@@ -435,35 +496,30 @@ public class GeminiService {
                             }
                         }
                     }
-                }
-            }
 
-            // Fallback scraping without hard 15-URL cap
-            if (!detectedUrls.isEmpty()) {
-                StringBuilder fetchedContextBuilder = new StringBuilder();
-                int fetchedCount = 0;
+                    if (!detectedUrls.isEmpty()) {
+                        StringBuilder fetchedContextBuilder = new StringBuilder();
+                        int fetchedCount = 0;
 
-                for (String url : detectedUrls) {
-                    String fetchedData = fetchUrlContentDirectly(url);
-                    if (fetchedData != null && !fetchedData.trim().isEmpty()) {
-                        fetchedContextBuilder.append("\n\n--- START OF FILE CONTEXT [URL: ").append(url).append("] ---\n");
-                        fetchedContextBuilder.append(fetchedData);
-                        fetchedContextBuilder.append("\n--- END OF FILE CONTEXT ---\n");
-                        fetchedCount++;
+                        for (String url : detectedUrls) {
+                            String fetchedData = fetchUrlContentDirectly(url);
+                            if (fetchedData != null && !fetchedData.trim().isEmpty()) {
+                                fetchedContextBuilder.append("\n\n--- START OF FILE CONTEXT [URL: ").append(url).append("] ---\n");
+                                fetchedContextBuilder.append(fetchedData);
+                                fetchedContextBuilder.append("\n--- END OF FILE CONTEXT ---\n");
+                                fetchedCount++;
+                            }
+                        }
+
+                        if (fetchedCount > 0) {
+                            JSONObject contextPart = new JSONObject();
+                            contextPart.put("text", "\n[System URL Context Retrieval: The following " + fetchedCount +
+                                    " source file(s) were successfully fetched and verified]\n" +
+                                    fetchedContextBuilder.toString());
+                            parts.put(contextPart);
+                            LiveLogManager.getInstance().ok("URL_CONTEXT", "Fallback Scraping Completed", "Injected " + fetchedCount + " source files.");
+                        }
                     }
-                }
-
-                if (fetchedCount > 0) {
-                    JSONObject lastTurn = contents.getJSONObject(contents.length() - 1);
-                    JSONArray parts = lastTurn.getJSONArray("parts");
-
-                    JSONObject contextPart = new JSONObject();
-                    contextPart.put("text", "\n[System URL Context Retrieval: The following " + fetchedCount +
-                            " source file(s) were successfully fetched and verified]\n" +
-                            fetchedContextBuilder.toString());
-
-                    parts.put(contextPart);
-                    LiveLogManager.getInstance().ok("URL_CONTEXT", "Fallback Scraping Completed", "Injected " + fetchedCount + " source files.");
                 }
             }
 
