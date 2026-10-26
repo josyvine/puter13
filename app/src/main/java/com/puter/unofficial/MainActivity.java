@@ -3000,7 +3000,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         popupWebView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                super.onPageStarted(view, url);
+                super.onPageStarted(view, url, favicon);
                 LiveLogManager.getInstance().process("PUTER_AUTH", "OAuth Page Loading", "URL: " + url);
                 view.evaluateJavascript(openerPolyfillScript, null);
                 checkAuthRedirect(url, view);
