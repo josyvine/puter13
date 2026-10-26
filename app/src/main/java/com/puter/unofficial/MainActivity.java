@@ -357,7 +357,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
 
         CoordinatorLayout.LayoutParams lp = new CoordinatorLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        
+
         DisplayMetrics dm = getResources().getDisplayMetrics();
         int marginX = (int) (16 * dm.density);
         int marginY = (int) (80 * dm.density);
@@ -424,9 +424,9 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         BottomSheetDialog dialog = new BottomSheetDialog(this, R.style.BottomSheetDialogTheme);
         dialog.getBehavior().setState(BottomSheetBehavior.STATE_EXPANDED);
         dialog.getBehavior().setSkipCollapsed(true);
-        
+
         View sheet = LayoutInflater.from(this).inflate(R.layout.dialog_system_log_console, null);
-        
+
         ImageView btnMinimize = sheet.findViewById(R.id.btnMinimizeConsole);
         EditText etSearch = sheet.findViewById(R.id.etLogSearch);
         ImageView btnClearSearch = sheet.findViewById(R.id.btnClearSearch);
@@ -537,7 +537,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         headlessAudioBridge = new HeadlessAudioBridge(this, headlessAudioWebView);
         webAppInterface.setAudioBridge(headlessAudioBridge);
 
-        // Ensure Android never throttles background JavaScript execution or audio streaming
         headlessAudioWebView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         headlessAudioWebView.setKeepScreenOn(true);
 
@@ -590,12 +589,10 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
 
             @Override
             public void onAudioChunkReceived(String base64Pcm) {
-                // PCM audio chunk received and playing through WebAudio in Gemini's voice character
             }
 
             @Override
             public void onCommentaryFinished() {
-                // Vocal turn completed; session remains active for user speech
                 LiveLogManager.getInstance().info("GEMINI_LIVE", "Vocal Turn Completed", "Microphone remains active for multi-turn input.");
             }
 
@@ -734,10 +731,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         });
     }
 
-    /**
-     * Appends live user speech transcription as a native blue chat bubble on the right.
-     * Includes strict debounce & phrase deduplication to prevent doubled user bubbles.
-     */
     public void onLiveUserTranscript(String text) {
         runOnUiThread(() -> {
             if (text == null || text.trim().isEmpty()) {
@@ -747,9 +740,8 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             String cleanText = text.trim();
             long now = System.currentTimeMillis();
 
-            // Strict Deduplication Guard: Ignore if identical phrase arrives within 2.5 seconds
             if (cleanText.equalsIgnoreCase(lastRenderedUserText) && (now - lastUserTextTimestamp) < 2500) {
-                LiveLogManager.getInstance().info("LIVE_TRANSCRIPT", "Duplicate User Speech Suppressed", 
+                LiveLogManager.getInstance().info("LIVE_TRANSCRIPT", "Duplicate User Speech Suppressed",
                         "Suppressed duplicate speech turn: \"" + cleanText + "\"");
                 return;
             }
@@ -780,10 +772,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         });
     }
 
-    /**
-     * Appends or updates live model vocalization as an assistant chat bubble on the left.
-     * Handles both streaming delta chunks and cumulative phrase updates seamlessly.
-     */
     public void onLiveModelTranscript(String chunk, boolean isTurnFinished) {
         runOnUiThread(() -> {
             try {
@@ -812,7 +800,6 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                             LiveLogManager.getInstance().ok("LIVE_TRANSCRIPT", "Model Bubble Created", clean);
                         } else {
                             String existing = currentLiveAssistantMsg.getText();
-                            // Smart accumulator: check if chunk is cumulative or incremental delta
                             if (existing != null && clean.startsWith(existing)) {
                                 currentLiveAssistantMsg.setText(clean);
                             } else {
@@ -854,7 +841,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                 isLiveVoiceConnected = false;
                 if (tvLiveVoiceStatus != null) tvLiveVoiceStatus.setText(R.string.voice_status_speaking);
                 toggleStarAnimation(false);
-                
+
                 String statusMsg = "🔴 Disconnected from Live Model";
                 if (code != 1000 && reason != null && !reason.isEmpty()) {
                     statusMsg += " (" + code + ": " + reason + ")";
@@ -1490,12 +1477,9 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         while (matcher.find()) {
             String rawUrl = matcher.group(0);
             if (rawUrl != null) {
-                // Strip markdown list numbering (e.g., 1. , 2) , - )
                 String clean = rawUrl.replaceAll("^[0-9]+[.)]\\s*", "")
                                      .replaceAll("^[-*•]\\s*", "");
-                // Strip trailing punctuation
                 clean = clean.replaceAll("[.,;:)>\\]]+$", "");
-                // Encode spaces
                 clean = clean.replace(" ", "%20");
                 if (clean.startsWith("http://") || clean.startsWith("https://")) {
                     list.add(clean);
@@ -1515,9 +1499,9 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         for (StagedFile file : attachments) {
             String name = (file.getFilename() != null) ? file.getFilename().toLowerCase(Locale.US) : "";
             String mime = (file.getMimeType() != null) ? file.getMimeType().toLowerCase(Locale.US) : "";
-            
-            boolean isTextDoc = name.endsWith(".txt") || name.endsWith(".json") || 
-                                name.endsWith(".csv") || name.endsWith(".md") || 
+
+            boolean isTextDoc = name.endsWith(".txt") || name.endsWith(".json") ||
+                                name.endsWith(".csv") || name.endsWith(".md") ||
                                 mime.startsWith("text/") || mime.contains("json");
 
             if (isTextDoc && file.getBase64DataUri() != null) {
@@ -1536,14 +1520,13 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
 
     /**
      * Executes parallel 20-URL batch scraping, live ECG loader progress, and compilation.
-     * Completes in ~6-8 seconds instead of 3.5 minutes.
      */
     private String executeHighSpeedUrlBatchProcessing(String basePrompt, List<String> urls) {
         long startTime = System.currentTimeMillis();
         int totalUrls = urls.size();
         int totalBatches = (totalUrls + URL_BATCH_SIZE - 1) / URL_BATCH_SIZE;
 
-        LiveLogManager.getInstance().process("URL_CONTEXT", "Initiating Multi-Batch URL Processing", 
+        LiveLogManager.getInstance().process("URL_CONTEXT", "Initiating Multi-Batch URL Processing",
                 "Total URLs: " + totalUrls + " | Total Batches: " + totalBatches + " (Batch Size: " + URL_BATCH_SIZE + ")");
 
         Map<Integer, String> fetchedResultsMap = new HashMap<>();
@@ -1554,18 +1537,16 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             int end = Math.min(start + URL_BATCH_SIZE, totalUrls);
             List<String> batchUrls = urls.subList(start, end);
 
-            // Live ECG Spinner Update on Main UI Thread
             runOnUiThread(() -> {
                 if (tvEcgStatus != null) {
-                    tvEcgStatus.setText("Analyzing Batch " + currentBatchNum + " of " + totalBatches + 
+                    tvEcgStatus.setText("Analyzing Batch " + currentBatchNum + " of " + totalBatches +
                                         " (URLs " + (start + 1) + "–" + end + ")...");
                 }
             });
 
-            LiveLogManager.getInstance().process("URL_CONTEXT", "Batch " + currentBatchNum + " of " + totalBatches, 
+            LiveLogManager.getInstance().process("URL_CONTEXT", "Batch " + currentBatchNum + " of " + totalBatches,
                     "Dispatching parallel downloads for URLs " + (start + 1) + " to " + end);
 
-            // Parallel execution: all 20 URLs fetched concurrently
             ExecutorService batchPool = Executors.newFixedThreadPool(Math.min(batchUrls.size(), 20));
             CountDownLatch latch = new CountDownLatch(batchUrls.size());
 
@@ -1586,9 +1567,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                             long latency = System.currentTimeMillis() - fetchStart;
                             if (resp.isSuccessful() && resp.body() != null) {
                                 ResponseBody body = resp.body();
-                                String mime = resp.header("Content-Type", "text/plain");
 
-                                // Stream-level clamping to 40,000 characters
                                 char[] buffer = new char[4096];
                                 StringBuilder sb = new StringBuilder();
                                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(body.byteStream(), StandardCharsets.UTF_8))) {
@@ -1605,7 +1584,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
 
                                 String content = sb.toString();
                                 synchronized (fetchedResultsMap) {
-                                    fetchedResultsMap.put(globalIndex, "--- START OF FILE CONTEXT [URL: " + targetUrl + "] ---\n" + 
+                                    fetchedResultsMap.put(globalIndex, "--- START OF FILE CONTEXT [URL: " + targetUrl + "] ---\n" +
                                                                        content + "\n--- END OF FILE CONTEXT ---\n");
                                 }
 
@@ -1617,7 +1596,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                             }
                         }
                     } catch (Exception e) {
-                        LiveLogManager.getInstance().error("URL_CONTEXT", "URL [" + (globalIndex + 1) + "/" + totalUrls + "] Fetch Exception", 
+                        LiveLogManager.getInstance().error("URL_CONTEXT", "URL [" + (globalIndex + 1) + "/" + totalUrls + "] Fetch Exception",
                                 e.getMessage() + " | " + targetUrl);
                     } finally {
                         latch.countDown();
@@ -1630,11 +1609,10 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             } catch (InterruptedException ignored) {}
             batchPool.shutdown();
 
-            LiveLogManager.getInstance().ok("URL_CONTEXT", "Batch " + currentBatchNum + " Completed", 
+            LiveLogManager.getInstance().ok("URL_CONTEXT", "Batch " + currentBatchNum + " Completed",
                     "Processed " + batchUrls.size() + " URLs in parallel.");
         }
 
-        // Final Compilation Stage
         runOnUiThread(() -> {
             if (tvEcgStatus != null) {
                 tvEcgStatus.setText("Compiling Complete A-to-Z Repository Report...");
@@ -1652,7 +1630,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         }
 
         long totalElapsed = System.currentTimeMillis() - startTime;
-        LiveLogManager.getInstance().ok("URL_CONTEXT", "Compilation Finished in " + (totalElapsed / 1000.0) + "s", 
+        LiveLogManager.getInstance().ok("URL_CONTEXT", "Compilation Finished in " + (totalElapsed / 1000.0) + "s",
                 "Successfully compiled " + fetchedResultsMap.size() + " files (" + compiledContext.length() + " chars) across " + totalBatches + " batches.");
 
         return basePrompt + "\n" + compiledContext.toString();
@@ -1752,37 +1730,129 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         }
     }
 
+    /**
+     * Dispatches multi-turn conversations to Gemini API with full historical chat memory serialization,
+     * system instructions, and inline media context.
+     */
     private void dispatchGeminiGeneration(String prompt, List<StagedFile> attachments, ChatMessage assistantMsg) {
         currentActiveAssistantMsg = assistantMsg;
         JSONObject payload = new JSONObject();
         try {
             JSONArray contents = new JSONArray();
-            JSONObject userPart = new JSONObject();
-            userPart.put("role", "user");
-            JSONArray parts = new JSONArray();
-            JSONObject textPart = new JSONObject();
-            textPart.put("text", prompt);
-            parts.put(textPart);
+
+            // 1. Serialize entire prior conversation history of this session (excluding current pending turn)
+            if (currentSession != null && currentSession.getMessages() != null) {
+                List<ChatMessage> history = new ArrayList<>(currentSession.getMessages());
+                if (history.size() >= 2) {
+                    history = history.subList(0, history.size() - 2);
+                }
+
+                for (ChatMessage msg : history) {
+                    if (msg == null || ChatMessage.ROLE_SYSTEM.equalsIgnoreCase(msg.getRole())) continue;
+                    String role = msg.getRole().equalsIgnoreCase(ChatMessage.ROLE_USER) ? "user" : "model";
+                    String text = msg.getText();
+                    if (text == null) text = "";
+
+                    JSONArray priorParts = new JSONArray();
+                    if (!text.trim().isEmpty()) {
+                        JSONObject tPart = new JSONObject();
+                        tPart.put("text", text);
+                        priorParts.put(tPart);
+                    }
+
+                    if (msg.getAttachments() != null && "user".equals(role)) {
+                        for (StagedFile file : msg.getAttachments()) {
+                            if (file != null && file.getBase64DataUri() != null && file.getMimeType() != null && file.getMimeType().startsWith("image/")) {
+                                String cleanB64 = file.getBase64DataUri().replaceFirst("^data:[^;]+;base64,", "");
+                                JSONObject inlineData = new JSONObject();
+                                inlineData.put("mimeType", file.getMimeType());
+                                inlineData.put("data", cleanB64);
+                                JSONObject partObj = new JSONObject();
+                                partObj.put("inlineData", inlineData);
+                                priorParts.put(partObj);
+                            }
+                        }
+                    }
+
+                    if (priorParts.length() == 0) continue;
+
+                    // Gemini strictly requires the first turn to have role: "user"
+                    if (contents.length() == 0 && !"user".equals(role)) {
+                        continue;
+                    }
+
+                    // Merge consecutive turns with the same role to prevent Gemini HTTP 400 Bad Request
+                    if (contents.length() > 0) {
+                        JSONObject lastTurn = contents.getJSONObject(contents.length() - 1);
+                        if (role.equals(lastTurn.optString("role"))) {
+                            JSONArray lastParts = lastTurn.getJSONArray("parts");
+                            for (int p = 0; p < priorParts.length(); p++) {
+                                lastParts.put(priorParts.get(p));
+                            }
+                            continue;
+                        }
+                    }
+
+                    JSONObject turnObj = new JSONObject();
+                    turnObj.put("role", role);
+                    turnObj.put("parts", priorParts);
+                    contents.put(turnObj);
+                }
+            }
+
+            // 2. Append the current user prompt & staged attachments
+            JSONArray currentParts = new JSONArray();
+            if (prompt != null && !prompt.trim().isEmpty()) {
+                JSONObject textPart = new JSONObject();
+                textPart.put("text", prompt);
+                currentParts.put(textPart);
+            }
 
             if (attachments != null) {
                 for (StagedFile file : attachments) {
-                    if (file.getBase64DataUri() != null && file.getMimeType() != null && file.getMimeType().startsWith("image/")) {
+                    if (file != null && file.getBase64DataUri() != null && file.getMimeType() != null && file.getMimeType().startsWith("image/")) {
                         String cleanB64 = file.getBase64DataUri().replaceFirst("^data:[^;]+;base64,", "");
                         JSONObject inlineData = new JSONObject();
                         inlineData.put("mimeType", file.getMimeType());
                         inlineData.put("data", cleanB64);
                         JSONObject partObj = new JSONObject();
                         partObj.put("inlineData", inlineData);
-                        parts.put(partObj);
+                        currentParts.put(partObj);
                     }
                 }
             }
 
-            userPart.put("parts", parts);
-            contents.put(userPart);
+            if (currentParts.length() > 0) {
+                if (contents.length() > 0) {
+                    JSONObject lastTurn = contents.getJSONObject(contents.length() - 1);
+                    if ("user".equals(lastTurn.optString("role"))) {
+                        JSONArray lastParts = lastTurn.getJSONArray("parts");
+                        for (int p = 0; p < currentParts.length(); p++) {
+                            lastParts.put(currentParts.get(p));
+                        }
+                    } else {
+                        JSONObject userTurn = new JSONObject();
+                        userTurn.put("role", "user");
+                        userTurn.put("parts", currentParts);
+                        contents.put(userTurn);
+                    }
+                } else {
+                    JSONObject userTurn = new JSONObject();
+                    userTurn.put("role", "user");
+                    userTurn.put("parts", currentParts);
+                    contents.put(userTurn);
+                }
+            }
+
             payload.put("contents", contents);
 
-            String sysInst = currentSession.getConfig().getSystemInstructions();
+            // 3. System Instructions (Custom Instructions & reply languages)
+            String sysInst = (currentSession != null && currentSession.getConfig() != null) ?
+                    currentSession.getConfig().getSystemInstructions() : null;
+            if (sysInst == null || sysInst.trim().isEmpty()) {
+                sysInst = prefs.getString(AppConstants.KEY_CUSTOM_INSTRUCTION, "");
+            }
+
             if (sysInst != null && !sysInst.trim().isEmpty()) {
                 JSONObject sysObj = new JSONObject();
                 JSONArray sysParts = new JSONArray();
@@ -1793,9 +1863,9 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
                 payload.put("systemInstruction", sysObj);
             }
 
-            // Web Grounding & Official URL Context Tool Declaration
+            // 4. Web Grounding & Official URL Context Tool Declaration
             JSONArray toolsArray = new JSONArray();
-            if (currentSession.getConfig().isWebGroundingEnabled()) {
+            if (currentSession != null && currentSession.getConfig() != null && currentSession.getConfig().isWebGroundingEnabled()) {
                 JSONObject googleSearch = new JSONObject();
                 googleSearch.put("googleSearch", new JSONObject());
                 toolsArray.put(googleSearch);
@@ -2331,7 +2401,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         aspectRatioBar.setVisibility(isImage ? View.VISIBLE : View.GONE);
     }
 
-    // --- LIVE VOICE AGENT (EXACT OLD APP MODEL BINDING & MULTI-TURN RESILIENCE) ---
+    // --- LIVE VOICE AGENT ---
 
     private void launchLiveVoiceAgent() {
         if (isLiveVoiceConnected) {
@@ -2408,7 +2478,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             sessionManager.saveSession(currentSession);
         }
 
-        LiveLogManager.getInstance().process("GEMINI_LIVE", "Launching Live Session via Bridge", 
+        LiveLogManager.getInstance().process("GEMINI_LIVE", "Launching Live Session via Bridge",
                 "Model: " + activeModelId + " | Key Length: " + apiKey.trim().length());
         Toast.makeText(this, "Connecting to Live Model: " + selectedModelText.getText(), Toast.LENGTH_SHORT).show();
 
@@ -2817,7 +2887,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         });
     }
 
-    // --- PUTER AUTHENTICATION POPUP WITH DEEP TELEMETRY & TOKEN EXTRACTION ---
+    // --- PUTER AUTHENTICATION POPUP ---
 
     private void toggleAuthMirror() {
         boolean loggedIn = AuthManager.getInstance(this).isLoggedIn();
@@ -2861,11 +2931,11 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         });
 
         dialogLayout.addView(closeButton, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 
+                ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
 
         dialogLayout.addView(popupWebView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 
+                ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
         WebSettings ws = popupWebView.getSettings();
@@ -2908,7 +2978,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
             }
         });
 
-        final String openerPolyfillScript = 
+        final String openerPolyfillScript =
                 "javascript:(function() {" +
                 "  if (!window.opener) {" +
                 "    window.opener = {" +
@@ -2930,7 +3000,7 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         popupWebView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                super.onPageStarted(view, url, favicon);
+                super.onPageStarted(view, url);
                 LiveLogManager.getInstance().process("PUTER_AUTH", "OAuth Page Loading", "URL: " + url);
                 view.evaluateJavascript(openerPolyfillScript, null);
                 checkAuthRedirect(url, view);
@@ -3243,3 +3313,4 @@ public class MainActivity extends AppCompatActivity implements LiveLogManager.Lo
         }
     }
 }
+
