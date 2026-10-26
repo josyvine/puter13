@@ -116,7 +116,7 @@ public class ChatSessionManager {
                             fj.put("filename", file.getFilename());
                             fj.put("mimeType", file.getMimeType());
                             fj.put("dataUri", file.getBase64DataUri());
-                            fj.put("fileSize", file.getFileSize());
+                            fj.put("fileSize", file.getSizeBytes());
                             attArr.put(fj);
                         }
                         mj.put("attachments", attArr);
