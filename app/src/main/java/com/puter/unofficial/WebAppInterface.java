@@ -146,7 +146,8 @@ public class WebAppInterface {
     public void onPuterStreamChunk(String chunk) {
         if (audioBridge != null) {
             audioBridge.dispatchPuterChunk(chunk);
-        } else if (mainActivity != null) {
+        }
+        if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onPuterChunkReceived(chunk));
         }
     }
@@ -155,7 +156,8 @@ public class WebAppInterface {
     public void onPuterStreamComplete(String fullResponse) {
         if (audioBridge != null) {
             audioBridge.dispatchPuterComplete(fullResponse);
-        } else if (mainActivity != null) {
+        }
+        if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onPuterGenerationComplete(fullResponse));
         }
     }
@@ -164,7 +166,8 @@ public class WebAppInterface {
     public void onPuterImageResult(String imageUrl) {
         if (audioBridge != null) {
             audioBridge.dispatchPuterImage(imageUrl);
-        } else if (mainActivity != null) {
+        }
+        if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onPuterImageReceived(imageUrl));
         }
     }
@@ -173,7 +176,8 @@ public class WebAppInterface {
     public void onPuterLiveModelsResult(String modelsJson) {
         if (audioBridge != null) {
             audioBridge.dispatchPuterModels(modelsJson);
-        } else if (mainActivity != null) {
+        }
+        if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onPuterLiveModelsReceived(modelsJson));
         }
     }
@@ -182,7 +186,8 @@ public class WebAppInterface {
     public void onPuterError(String errorMessage) {
         if (audioBridge != null) {
             audioBridge.dispatchPuterError(errorMessage);
-        } else if (mainActivity != null) {
+        }
+        if (mainActivity != null) {
             mainActivity.runOnUiThread(() -> mainActivity.onPuterGenerationError(errorMessage));
         }
     }
